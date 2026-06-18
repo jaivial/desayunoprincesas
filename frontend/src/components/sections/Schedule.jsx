@@ -10,10 +10,11 @@ const scheduleItems = [
 
 export default function Schedule() {
   const settings = useSelector((state) => state.settings.data);
+  const openDates = useSelector((state) => state.booking.openDates);
 
   const formatDate = (dateString) => {
     if (!dateString) return 'Fecha por confirmar';
-    const date = new Date(dateString);
+    const date = new Date(dateString + 'T00:00:00');
     return date.toLocaleDateString('es-ES', {
       weekday: 'long',
       day: 'numeric',
@@ -21,6 +22,12 @@ export default function Schedule() {
       year: 'numeric',
     });
   };
+
+  const eventDateDisplay = openDates && openDates.length > 1
+    ? openDates.map((d) => formatDate(d.date)).join(' · ')
+    : (openDates && openDates.length === 1)
+      ? formatDate(openDates[0].date)
+      : formatDate(settings?.eventDate);
 
   return (
     <section id="horarios" className="py-20 bg-gradient-to-b from-princess-purple/20 to-magic-dark">
@@ -43,7 +50,7 @@ export default function Schedule() {
             </div>
             <div>
               <p className="text-white/60 text-sm">Fecha del evento</p>
-              <p className="text-white font-semibold text-lg">{formatDate(settings?.eventDate)}</p>
+              <p className="text-white font-semibold text-lg">{eventDateDisplay}</p>
             </div>
           </div>
           <a

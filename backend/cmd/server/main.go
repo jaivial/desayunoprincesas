@@ -48,6 +48,7 @@ func main() {
 	// Public routes (no auth required)
 	mux.HandleFunc("/api/public/settings", methodHandler("GET", h.GetPublicSettings))
 	mux.HandleFunc("/api/public/capacity", methodHandler("GET", h.GetCapacity))
+	mux.HandleFunc("/api/public/event-dates", methodHandler("GET", h.GetPublicEventDates))
 	mux.HandleFunc("/api/public/bookings", methodHandler("POST", h.CreateBooking))
 	mux.HandleFunc("/api/public/bookings/", h.GetBooking)
 	mux.HandleFunc("/api/public/verify-session/", methodHandler("GET", h.VerifyStripeSession))
@@ -67,6 +68,8 @@ func main() {
 	adminMux.HandleFunc("/api/admin/bookings/", adminBookingRouter(h))
 	adminMux.HandleFunc("/api/admin/qr/confirm", methodHandler("POST", h.ConfirmQR))
 	adminMux.HandleFunc("/api/admin/settings", settingsRouter(h))
+	adminMux.HandleFunc("/api/admin/event-dates", eventDatesRouter(h))
+	adminMux.HandleFunc("/api/admin/event-dates/", eventDateRouter(h))
 
 	// Apply auth middleware to admin routes
 	mux.Handle("/api/admin/", authService.Middleware(adminMux))
@@ -166,6 +169,47 @@ func settingsRouter(h *handlers.Handler) http.HandlerFunc {
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		}
+	}
+}
+
+// eventDatesRouter handles /api/admin/event-dates (collection).
+func eventDatesRouter(h *handlers.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		switch r.Method {
+		case "GET":
+			h.ListEventDates(w, r)
+		case "POST":
+			h.CreateEventDate(w, r)
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+// eventDateRouter handles /api/admin/event-dates/{id} and /api/admin/event-dates/{id}/packs.
+func eventDateRouter(h *handlers.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/packs") {
+			if r.Method == "PATCH" {
+				h.UpsertEventDatePacks(w, r)
+				return
+			}
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Method == "PATCH" {
+			h.UpdateEventDate(w, r)
+			return
+		}
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 	}
 }
 

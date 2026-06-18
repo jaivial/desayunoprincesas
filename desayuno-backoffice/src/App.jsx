@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
-import { Home, Users, QrCode, Settings, Menu, LogOut } from 'lucide-react';
+import { Home, Users, QrCode, Settings, Menu, LogOut, Mail } from 'lucide-react';
 import { useState } from 'react';
 import { checkAuth, logout } from './store/authSlice';
 import LoginPage from './pages/LoginPage';
@@ -12,12 +12,14 @@ import QRReaderPage from './pages/QRReaderPage';
 import QRConfirmPage from './pages/QRConfirmPage';
 import SettingsPage from './pages/SettingsPage';
 import EditPackPage from './pages/EditPackPage';
+import EmailSettingsPage from './pages/EmailSettingsPage';
 
 const navItems = [
   { to: '/', icon: Home, label: 'Inicio' },
   { to: '/inscripciones', icon: Users, label: 'Inscripciones' },
   { to: '/qr-reader', icon: QrCode, label: 'Lector QR' },
   { to: '/settings', icon: Settings, label: 'Ajustes' },
+  { to: '/email-settings', icon: Mail, label: 'Email' },
 ];
 
 function ProtectedRoute({ children }) {
@@ -144,6 +146,11 @@ function App() {
       <Route path="/settings/packs/:id" element={
         <ProtectedRoute>
           <Layout><EditPackPage /></Layout>
+        </ProtectedRoute>
+      } />
+      <Route path="/email-settings" element={
+        <ProtectedRoute>
+          <Layout><EmailSettingsPage /></Layout>
         </ProtectedRoute>
       } />
     </Routes>

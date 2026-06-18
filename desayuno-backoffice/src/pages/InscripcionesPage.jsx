@@ -6,6 +6,7 @@ import { ChevronDown, ChevronUp, Trash2, Mail, Loader2, Check, X, Search, Filter
 import Select from '../components/ui/Select';
 import { getAuthHeaders } from '../store/authSlice';
 import { ToastContainer, useToast } from '../components/ui/Toast';
+import { fetchEventDates } from '../store/eventDatesSlice';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
@@ -60,6 +61,7 @@ export default function InscripcionesPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { list: bookings, loading, filters } = useSelector((state) => state.bookings);
+  const { list: eventDates } = useSelector((state) => state.eventDates);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [localFilters, setLocalFilters] = useState(filters);
@@ -71,6 +73,7 @@ export default function InscripcionesPage() {
 
   useEffect(() => {
     dispatch(fetchBookings(filters));
+    dispatch(fetchEventDates());
   }, [dispatch, filters]);
 
   const handleFilter = () => {
@@ -78,7 +81,7 @@ export default function InscripcionesPage() {
   };
 
   const handleClearFilters = () => {
-    const cleared = { name: '', email: '', status: '', method: '', confirmed: '' };
+    const cleared = { name: '', email: '', status: '', method: '', confirmed: '', dateId: '' };
     setLocalFilters(cleared);
     dispatch(setFilters(cleared));
   };
@@ -138,6 +141,18 @@ export default function InscripcionesPage() {
     { value: 'true', label: 'Confirmada' },
     { value: 'false', label: 'No confirmada' },
   ];
+
+  const dateOptions = [
+    { value: '', label: 'Todas las fechas' },
+    ...eventDates.map((ed) => ({ value: String(ed.id), label: ed.eventDate })),
+  ];
+
+  const formatEventDate = (dateStr) => {
+    if (!dateStr) return '—';
+    // dateStr is YYYY-MM-DD from backend
+    const [y, m, d] = dateStr.split('-');
+    return `${d}/${m}/${y}`;
+  };
 
   const hasActiveFilters = Object.values(localFilters).some(v => v !== '');
 
@@ -219,6 +234,9 @@ export default function InscripcionesPage() {
           )}
         </div>
         <span className="text-xs text-gray-400">{formatDate(b.createdAt)}</span>
+        {b.eventDate && (
+          <span className="text-xs text-blue-500">Evento: {formatEventDate(b.eventDate)}</span>
+        )}
       </div>
     </div>
   );
@@ -257,7 +275,7 @@ export default function InscripcionesPage() {
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Estado de pago</label>
                 <Select value={localFilters.status || ''} onChange={(value) => setLocalFilters({ ...localFilters, status: value })} options={statusOptions} placeholder="Seleccionar estado..." />
@@ -269,6 +287,10 @@ export default function InscripcionesPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Asistencia</label>
                 <Select value={localFilters.confirmed || ''} onChange={(value) => setLocalFilters({ ...localFilters, confirmed: value })} options={confirmedOptions} placeholder="Seleccionar asistencia..." />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Día del evento</label>
+                <Select value={localFilters.dateId || ''} onChange={(value) => setLocalFilters({ ...localFilters, dateId: value })} options={dateOptions} placeholder="Todas las fechas..." />
               </div>
             </div>
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
@@ -313,7 +335,8 @@ export default function InscripcionesPage() {
                   <th className="text-left py-3 px-2 font-semibold">Estado</th>
                   <th className="text-left py-3 px-2 font-semibold">Método</th>
                   <th className="text-right py-3 px-2 font-semibold">Importe</th>
-                  <th className="text-left py-3 px-2 font-semibold">Fecha</th>
+                  <th className="text-left py-3 px-2 font-semibold">Fecha reserva</th>
+                  <th className="text-left py-3 px-2 font-semibold">Día evento</th>
                   <th className="text-center py-3 px-2 font-semibold">Asist.</th>
                   <th className="text-right py-3 px-2 font-semibold">Acciones</th>
                 </tr>
@@ -346,6 +369,7 @@ export default function InscripcionesPage() {
                     <td className="py-3 px-2 text-gray-600">{b.paymentMethod === 'stripe' ? 'Online' : 'Efectivo'}</td>
                     <td className="py-3 px-2 text-right font-medium">{(b.totalAmountCents / 100).toFixed(2)}€</td>
                     <td className="py-3 px-2 text-gray-600 text-xs">{formatDate(b.createdAt)}</td>
+                    <td className="py-3 px-2 text-gray-600 text-xs">{formatEventDate(b.eventDate)}</td>
                     <td className="py-3 px-2 text-center">
                       {b.confirmedAssistance ? (
                         <span className="inline-flex items-center justify-center w-6 h-6 bg-green-100 rounded-full"><Check className="w-4 h-4 text-green-600" /></span>

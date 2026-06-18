@@ -57,12 +57,29 @@ type resolvedCart struct {
 // fallback when Items is empty.
 func (h *Handler) resolveCart(req *models.CreateBookingRequest) (*resolvedCart, error) {
 	var adultPrice, childPrice, earlyBirdCount, earlyBirdPercent int
-	if err := h.db.QueryRow(`SELECT adult_price_cents, child_price_cents, early_bird_count, early_bird_discount_percent FROM settings WHERE id = 1`).Scan(&adultPrice, &childPrice, &earlyBirdCount, &earlyBirdPercent); err != nil {
-		return nil, err
+
+	if req.EventDateID > 0 {
+		// Prices from the specific event date row.
+		if err := h.db.QueryRow(
+			`SELECT adult_price_cents, child_price_cents, early_bird_count, early_bird_discount_percent
+			 FROM event_opening_dates WHERE id = ?`, req.EventDateID,
+		).Scan(&adultPrice, &childPrice, &earlyBirdCount, &earlyBirdPercent); err != nil {
+			return nil, err
+		}
+	} else {
+		// Legacy fallback: global settings.
+		if err := h.db.QueryRow(`SELECT adult_price_cents, child_price_cents, early_bird_count, early_bird_discount_percent FROM settings WHERE id = 1`).Scan(&adultPrice, &childPrice, &earlyBirdCount, &earlyBirdPercent); err != nil {
+			return nil, err
+		}
 	}
 
+	// Scope early-bird count to the specific date if one is given.
 	var paidBookingsCount int
-	h.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE payment_status = 'paid' AND deleted_at IS NULL`).Scan(&paidBookingsCount)
+	if req.EventDateID > 0 {
+		h.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE event_date_id = ? AND payment_status = 'paid' AND deleted_at IS NULL`, req.EventDateID).Scan(&paidBookingsCount)
+	} else {
+		h.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE payment_status = 'paid' AND deleted_at IS NULL`).Scan(&paidBookingsCount)
+	}
 	applyEarlyBird := earlyBirdCount > 0 && earlyBirdPercent > 0 && paidBookingsCount < earlyBirdCount
 
 	discount := func(c int) int {
