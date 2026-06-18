@@ -15,11 +15,12 @@ const DAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
 /** Minimal inline month calendar. openDates = [{id, date, full}] keyed by YYYY-MM-DD. */
 function MonthCalendar({ openDates, onSelect, selectedId }) {
+  // date may be RFC3339 (…T00:00:00Z); key everything by YYYY-MM-DD.
   const dateMap = {};
-  openDates.forEach((d) => { dateMap[d.date] = d; });
+  openDates.forEach((d) => { dateMap[d.date.slice(0, 10)] = d; });
 
   // Find the month to show: default to the first open date's month
-  const firstDate = openDates.length > 0 ? new Date(openDates[0].date + 'T00:00:00') : new Date();
+  const firstDate = openDates.length > 0 ? new Date(openDates[0].date.slice(0, 10) + 'T00:00:00') : new Date();
   const [year, setYear] = useState(firstDate.getFullYear());
   const [month, setMonth] = useState(firstDate.getMonth()); // 0-indexed
 
@@ -122,6 +123,7 @@ export default function TicketWizard() {
 
   const [eventDates, setEventDates] = useState(null); // null = loading
   const [selectedDate, setSelectedDate] = useState(null); // {id, date, full}
+  const activeStepRef = useRef(null);
 
   // Fetch open event dates on mount
   useEffect(() => {
@@ -140,6 +142,9 @@ export default function TicketWizard() {
             dispatch(fetchSettings(d.id));
             dispatch(fetchCapacity(d.id));
           }
+        } else {
+          // >1 date: date picker is the first step
+          dispatch(setStep(0));
         }
       })
       .catch(() => {
@@ -152,6 +157,11 @@ export default function TicketWizard() {
       const y = formRef.current.getBoundingClientRect().top + window.scrollY - 300;
       window.scrollTo({ top: y, behavior: 'smooth' });
     }
+  }, [step]);
+
+  // Keep the active step centered in the (scrollable) stepper.
+  useEffect(() => {
+    activeStepRef.current?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
   }, [step]);
 
   const { availableTickets, loading } = useSelector((state) => state.capacity);
@@ -270,11 +280,13 @@ export default function TicketWizard() {
           </div>
         </div>
 
-        {/* Step indicator */}
-        <div className="flex items-center justify-center mb-10 overflow-x-auto pb-2">
+        {/* Step indicator — scrolls horizontally without clipping the first step */}
+        <div className="mb-10 overflow-x-auto pb-2 scrollbar-hide">
+        <div className="flex items-center w-max min-w-full justify-center mx-auto px-2">
           {steps.map((s, index) => (
             <div key={s.num} className="flex items-center">
               <button
+                ref={s.num === step ? activeStepRef : null}
                 onClick={() => s.num < step && dispatch(setStep(s.num))}
                 disabled={s.num > step || (s.num === 0 && !hasMultipleDates)}
                 className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-full transition-all whitespace-nowrap ${
@@ -295,6 +307,7 @@ export default function TicketWizard() {
               )}
             </div>
           ))}
+        </div>
         </div>
 
         {/* Step content */}

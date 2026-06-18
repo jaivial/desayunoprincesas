@@ -570,7 +570,7 @@ func (h *Handler) CreateStripeCheckout(w http.ResponseWriter, r *http.Request) {
 	var eventDateStr string
 	if eventDateID > 0 {
 		var isOpen bool
-		err := h.db.QueryRow(`SELECT event_date, is_open FROM event_opening_dates WHERE id = ?`, eventDateID).Scan(&eventDateStr, &isOpen)
+		err := h.db.QueryRow(`SELECT DATE_FORMAT(event_date, '%Y-%m-%d'), is_open FROM event_opening_dates WHERE id = ?`, eventDateID).Scan(&eventDateStr, &isOpen)
 		if err != nil {
 			h.respondError(w, http.StatusBadRequest, "Fecha de evento no válida")
 			return
@@ -975,7 +975,7 @@ func (h *Handler) GetKPIs(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 	query := `SELECT b.id, b.name, b.surname, b.email, b.phone_country_code, b.phone_number, b.adults_count, b.children_count, b.pack_type, b.has_photographer, b.has_premium_pass, b.total_amount_cents, b.payment_status, b.payment_method, b.confirmed_assistance, b.created_at,
 		(SELECT COUNT(*) FROM member_allergies ma WHERE ma.booking_id = b.id) as allergy_count,
-		eod.event_date
+		DATE_FORMAT(eod.event_date, '%Y-%m-%d')
 		FROM bookings b
 		LEFT JOIN event_opening_dates eod ON eod.id = b.event_date_id
 		WHERE b.deleted_at IS NULL`
@@ -1337,7 +1337,7 @@ func (h *Handler) ConfirmQR(w http.ResponseWriter, r *http.Request) {
 		SELECT b.id, b.name, b.surname, b.email, b.phone_country_code, b.phone_number,
 		       b.adults_count, b.children_count, b.pack_type, b.has_photographer, b.has_premium_pass,
 		       b.total_amount_cents, b.payment_status, b.payment_method, b.confirmed_assistance,
-		       eod.event_date
+		       DATE_FORMAT(eod.event_date, '%Y-%m-%d')
 		FROM bookings b
 		LEFT JOIN event_opening_dates eod ON eod.id = b.event_date_id
 		WHERE b.qr_token = ? AND b.deleted_at IS NULL`, req.QRToken).Scan(
@@ -1613,7 +1613,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 // ListEventDates returns all event dates with their settings and per-pack config (admin).
 func (h *Handler) ListEventDates(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.Query(`SELECT id, event_date, is_open, max_capacity, adult_price_cents, child_price_cents,
+	rows, err := h.db.Query(`SELECT id, DATE_FORMAT(event_date, '%Y-%m-%d'), is_open, max_capacity, adult_price_cents, child_price_cents,
 		early_bird_count, early_bird_discount_percent, max_individual_adult_tickets, max_individual_child_tickets,
 		created_at, updated_at FROM event_opening_dates ORDER BY event_date ASC`)
 	if err != nil {
@@ -1834,7 +1834,7 @@ func (h *Handler) UpsertEventDatePacks(w http.ResponseWriter, r *http.Request) {
 // GetPublicEventDates returns open event dates with availability info (public).
 func (h *Handler) GetPublicEventDates(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.Query(`
-		SELECT e.id, e.event_date, e.max_capacity,
+		SELECT e.id, DATE_FORMAT(e.event_date, '%Y-%m-%d'), e.max_capacity,
 			COALESCE((SELECT SUM(adults_count+children_count) FROM bookings b
 				WHERE b.event_date_id = e.id AND b.payment_status = 'paid' AND b.deleted_at IS NULL), 0) AS sold
 		FROM event_opening_dates e

@@ -120,7 +120,8 @@ export default function Hero() {
    */
   const formatDate = (dateString) => {
     if (!dateString) return 'Próximamente';
-    const date = new Date(dateString + 'T00:00:00');
+    // dateString may be YYYY-MM-DD or RFC3339 (…T00:00:00Z); take date part only.
+    const date = new Date(dateString.slice(0, 10) + 'T00:00:00');
     return date.toLocaleDateString('es-ES', {
       weekday: 'long',
       day: 'numeric',

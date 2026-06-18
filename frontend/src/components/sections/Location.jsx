@@ -1,6 +1,6 @@
 import { MapPin, Navigation } from 'lucide-react';
 
-const ADDRESS = 'C/ Sequía de Rascanya, 2, 46470 Catarroja, Valencia';
+const ADDRESS = 'Carrer Sèquia Rascanya, 2, 46470 Catarroja, València';
 const MAPS_URL = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(ADDRESS)}`;
 
 export default function Location() {

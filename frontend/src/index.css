@@ -32,4 +32,12 @@
   .text-gradient {
     @apply bg-clip-text text-transparent bg-gradient-to-r from-princess-pink via-princess-purple to-princess-gold;
   }
+  /* Hide scrollbar, keep scroll. */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
 }

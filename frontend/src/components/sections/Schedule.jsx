@@ -14,7 +14,8 @@ export default function Schedule() {
 
   const formatDate = (dateString) => {
     if (!dateString) return 'Fecha por confirmar';
-    const date = new Date(dateString + 'T00:00:00');
+    // dateString may be YYYY-MM-DD or RFC3339 (…T00:00:00Z); take date part only.
+    const date = new Date(dateString.slice(0, 10) + 'T00:00:00');
     return date.toLocaleDateString('es-ES', {
       weekday: 'long',
       day: 'numeric',
@@ -54,7 +55,7 @@ export default function Schedule() {
             </div>
           </div>
           <a
-            href="https://www.google.com/maps/dir/?api=1&destination=C%2F+Sequ%C3%ADa+de+Rascanya%2C+2%2C+46470+Catarroja%2C+Valencia"
+            href="https://www.google.com/maps/dir/?api=1&destination=Carrer%20S%C3%A8quia%20Rascanya%2C%202%2C%2046470%20Catarroja%2C%20Val%C3%A8ncia"
             target="_blank"
             rel="noopener noreferrer"
             className="glass rounded-3xl p-6 flex items-center gap-4 hover:bg-white/10 transition-colors group"

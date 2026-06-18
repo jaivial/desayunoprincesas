@@ -23,7 +23,7 @@ export default function SettingsPage() {
   }, [dispatch]);
 
   // When a date is selected, seed form from that date's data
-  const selectedED = eventDates.find((ed) => ed.eventDate === selectedDate) || null;
+  const selectedED = eventDates.find((ed) => ed.eventDate.slice(0, 10) === selectedDate) || null;
 
   useEffect(() => {
     if (selectedED) {
@@ -65,7 +65,12 @@ export default function SettingsPage() {
     if (!selectedDate) return;
     setMessage(null);
     try {
-      await dispatch(createEventDate(selectedDate)).unwrap();
+      // Existing-but-closed day → reopen; brand-new day → create.
+      if (selectedED) {
+        await dispatch(patchEventDate({ id: selectedED.id, data: { isOpen: true } })).unwrap();
+      } else {
+        await dispatch(createEventDate(selectedDate)).unwrap();
+      }
       setMessage({ type: 'success', text: `Día ${selectedDate} abierto correctamente` });
     } catch {
       setMessage({ type: 'error', text: 'Error al abrir el día' });
@@ -131,7 +136,7 @@ export default function SettingsPage() {
 
   const formatDay = (ymd) => {
     if (!ymd) return '';
-    const [y, m, d] = ymd.split('-');
+    const [y, m, d] = ymd.slice(0, 10).split('-');
     return `${d}/${m}/${y}`;
   };
 
@@ -167,7 +172,7 @@ export default function SettingsPage() {
       )}
 
       {/* Selected a day that has no event date record, or is closed */}
-      {selectedDate && !selectedED && (
+      {selectedDate && (!selectedED || !selectedED.isOpen) && (
         <div className="card p-4 sm:p-6">
           <p className="text-sm text-gray-600 mb-4">
             El día <strong>{formatDay(selectedDate)}</strong> no está abierto.
@@ -189,7 +194,7 @@ export default function SettingsPage() {
       )}
 
       {/* Selected an open day → show full editor */}
-      {selectedED && (
+      {selectedED && selectedED.isOpen && (
         <form onSubmit={handleSave} className="space-y-4 sm:space-y-6">
           {/* Day header */}
           <div className="card p-4 sm:p-6 flex items-center justify-between flex-wrap gap-3">

@@ -144,13 +144,16 @@ export default function InscripcionesPage() {
 
   const dateOptions = [
     { value: '', label: 'Todas las fechas' },
-    ...eventDates.map((ed) => ({ value: String(ed.id), label: ed.eventDate })),
+    ...eventDates.map((ed) => {
+      const [y, m, d] = ed.eventDate.slice(0, 10).split('-');
+      return { value: String(ed.id), label: `${d}/${m}/${y}` };
+    }),
   ];
 
   const formatEventDate = (dateStr) => {
     if (!dateStr) return '—';
-    // dateStr is YYYY-MM-DD from backend
-    const [y, m, d] = dateStr.split('-');
+    // dateStr may be YYYY-MM-DD or RFC3339 (…T00:00:00Z); take the date part only.
+    const [y, m, d] = dateStr.slice(0, 10).split('-');
     return `${d}/${m}/${y}`;
   };
 

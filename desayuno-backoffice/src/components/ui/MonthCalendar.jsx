@@ -35,7 +35,8 @@ export default function MonthCalendar({ eventDates = [], selected, onSelect }) {
     // Start view on the first open date if any, otherwise today.
     if (eventDates.length > 0) {
       const first = eventDates.find(d => d.isOpen) || eventDates[0];
-      if (first) return new Date(first.eventDate + 'T12:00:00');
+      // ponytail: backend serializes the DATE as RFC3339 (…T00:00:00Z); take YYYY-MM-DD only.
+      if (first) return new Date(first.eventDate.slice(0, 10) + 'T12:00:00');
     }
     return today;
   });
@@ -49,7 +50,7 @@ export default function MonthCalendar({ eventDates = [], selected, onSelect }) {
   // Build lookup: "YYYY-MM-DD" -> event date object
   const byDate = {};
   for (const ed of eventDates) {
-    byDate[ed.eventDate] = ed;
+    byDate[ed.eventDate.slice(0, 10)] = ed;
   }
 
   const cells = [];
