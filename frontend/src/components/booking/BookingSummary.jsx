@@ -84,6 +84,7 @@ export default function BookingSummary() {
         childrenCount: totals.children,
         items: cartItems,
         memberAllergies: allergiesPayload,
+        eventDateId: booking.eventDateId || 0,
       };
 
       const res = await fetch(`${API_URL}/api/public/stripe/checkout`, {

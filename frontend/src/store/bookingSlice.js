@@ -52,6 +52,8 @@ export const selectCartItems = (state) => {
 
 const initialState = {
   step: 1,
+  eventDateId: 0,
+  openDates: [], // [{id, date, availableTickets, full}] from /api/public/event-dates
   packQuantities: {},
   adultsCount: 0,
   childrenCount: 0,
@@ -71,6 +73,12 @@ const bookingSlice = createSlice({
   reducers: {
     setStep: (state, action) => {
       state.step = action.payload;
+    },
+    setEventDateId: (state, action) => {
+      state.eventDateId = action.payload;
+    },
+    setOpenDates: (state, action) => {
+      state.openDates = action.payload;
     },
     setPackQuantity: (state, action) => {
       const { packId, quantity } = action.payload;
@@ -118,6 +126,8 @@ const bookingSlice = createSlice({
 
 export const {
   setStep,
+  setEventDateId,
+  setOpenDates,
   setPackQuantity,
   setAdultsCount,
   setChildrenCount,

@@ -27,8 +27,11 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
  * @example
  * dispatch(fetchSettings());
  */
-export const fetchSettings = createAsyncThunk('settings/fetch', async () => {
-  const res = await fetch(`${API_URL}/api/public/settings`);
+export const fetchSettings = createAsyncThunk('settings/fetch', async (dateId) => {
+  const url = dateId
+    ? `${API_URL}/api/public/settings?dateId=${dateId}`
+    : `${API_URL}/api/public/settings`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch settings');
   return res.json();
 });

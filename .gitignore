@@ -6,3 +6,10 @@ dist/
 build/
 .DS_Store
 *.log
+.plans/
+
+# Go build artifacts
+backend/desayuno-server
+backend/server
+backend/*.bak
+backend/*.bak2

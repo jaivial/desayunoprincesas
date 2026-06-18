@@ -142,9 +142,11 @@ func (s *EmailService) SendConfirmation(bookingID string) {
 	var eventDate sql.NullTime
 
 	err := s.db.QueryRow(`
-		SELECT b.name, b.surname, b.email, b.qr_token, b.qr_code_url, b.adults_count, b.children_count, b.pack_type, b.has_photographer, b.has_premium_pass, b.total_amount_cents, s.event_date 
-		FROM bookings b 
-		JOIN settings s ON s.id = 1 
+		SELECT b.name, b.surname, b.email, b.qr_token, b.qr_code_url, b.adults_count, b.children_count, b.pack_type, b.has_photographer, b.has_premium_pass, b.total_amount_cents,
+			COALESCE(eod.event_date, s.event_date)
+		FROM bookings b
+		JOIN settings s ON s.id = 1
+		LEFT JOIN event_opening_dates eod ON eod.id = b.event_date_id
 		WHERE b.id = ?
 	`, bookingID).Scan(&name, &surname, &email, &qrToken, &qrCodeURL, &adultsCount, &childrenCount, &packType, &hasPhotographer, &hasPremiumPass, &totalAmountCents, &eventDate)
 	if err != nil {

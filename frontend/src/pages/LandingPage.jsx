@@ -32,6 +32,7 @@ export default function LandingPage() {
               maxCapacity: data.maxCapacity,
               soldTickets: data.soldTickets,
               availableTickets: data.availableTickets,
+              dateId: data.dateId || 0,
             }));
           }
         } catch (err) {

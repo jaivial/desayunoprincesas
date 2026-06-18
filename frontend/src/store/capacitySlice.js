@@ -23,8 +23,11 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
  * @returns {Promise<Object>} Capacity object with max, sold, and available counts
  * @throws {Error} When API request fails
  */
-export const fetchCapacity = createAsyncThunk('capacity/fetch', async () => {
-  const res = await fetch(`${API_URL}/api/public/capacity`);
+export const fetchCapacity = createAsyncThunk('capacity/fetch', async (dateId) => {
+  const url = dateId
+    ? `${API_URL}/api/public/capacity?dateId=${dateId}`
+    : `${API_URL}/api/public/capacity`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch capacity');
   return res.json();
 });
@@ -45,24 +48,21 @@ const capacitySlice = createSlice({
     maxCapacity: 0,
     soldTickets: 0,
     availableTickets: 0,
+    selectedDateId: 0,
     loading: false,
     error: null,
   },
   reducers: {
     /**
      * Updates capacity from WebSocket message.
-     * Called when server broadcasts capacity.updated event.
-     * 
-     * @param {Object} state - Current state
-     * @param {Object} action - Action with payload
-     * @param {number} action.payload.maxCapacity - New max capacity
-     * @param {number} action.payload.soldTickets - New sold count
-     * @param {number} action.payload.availableTickets - New available count
+     * If the payload carries a dateId, ignore updates for other dates.
      */
     updateCapacity: (state, action) => {
-      state.maxCapacity = action.payload.maxCapacity;
-      state.soldTickets = action.payload.soldTickets;
-      state.availableTickets = action.payload.availableTickets;
+      const { dateId, maxCapacity, soldTickets, availableTickets } = action.payload;
+      if (dateId && state.selectedDateId && dateId !== state.selectedDateId) return;
+      state.maxCapacity = maxCapacity;
+      state.soldTickets = soldTickets;
+      state.availableTickets = availableTickets;
     },
   },
   extraReducers: (builder) => {
@@ -76,6 +76,7 @@ const capacitySlice = createSlice({
         state.maxCapacity = action.payload.maxCapacity;
         state.soldTickets = action.payload.soldTickets;
         state.availableTickets = action.payload.availableTickets;
+        if (action.meta.arg) state.selectedDateId = action.meta.arg;
       })
       .addCase(fetchCapacity.rejected, (state, action) => {
         state.loading = false;

@@ -188,8 +188,42 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE
 		)`,
 
+		// Event opening dates - each openable event day with its own capacity,
+		// prices, limits and early-bird config. Replaces the single settings.event_date.
+		`CREATE TABLE IF NOT EXISTS event_opening_dates (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			event_date DATE NOT NULL UNIQUE,
+			is_open BOOLEAN NOT NULL DEFAULT FALSE,
+			max_capacity INT NOT NULL DEFAULT 120,
+			adult_price_cents INT NOT NULL DEFAULT 3500,
+			child_price_cents INT NOT NULL DEFAULT 4000,
+			early_bird_count INT NOT NULL DEFAULT 0,
+			early_bird_discount_percent INT NOT NULL DEFAULT 0,
+			max_individual_adult_tickets INT NOT NULL DEFAULT 0,
+			max_individual_child_tickets INT NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		)`,
+
+		// Per-date pack config - price/limit/active for a pack on a specific date.
+		// The packs table stays the global catalog (name/emoji/includes/colors).
+		`CREATE TABLE IF NOT EXISTS event_date_packs (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			event_date_id INT NOT NULL,
+			pack_id VARCHAR(50) NOT NULL,
+			active BOOLEAN NOT NULL DEFAULT TRUE,
+			price_cents INT NOT NULL DEFAULT 0,
+			max_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+			max_tickets INT NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_date_pack (event_date_id, pack_id),
+			KEY idx_event_date_id (event_date_id),
+			FOREIGN KEY (event_date_id) REFERENCES event_opening_dates(id) ON DELETE CASCADE
+		)`,
+
 		// Seed default settings if not exists
-		`INSERT IGNORE INTO settings (id, max_capacity, adult_price_cents, child_price_cents) 
+		`INSERT IGNORE INTO settings (id, max_capacity, adult_price_cents, child_price_cents)
 		 VALUES (1, 120, 3500, 4000)`,
 
 		// Seed default admin user (password: admin123) - CHANGE IN PRODUCTION
@@ -225,6 +259,10 @@ func Migrate(db *sql.DB) error {
 		// Individual ticket limits per purchase
 		`ALTER TABLE settings ADD COLUMN max_individual_adult_tickets INT NOT NULL DEFAULT 0`,
 		`ALTER TABLE settings ADD COLUMN max_individual_child_tickets INT NOT NULL DEFAULT 0`,
+		// Multi-date: bookings point at the date they belong to; settings keeps a default.
+		`ALTER TABLE bookings ADD COLUMN event_date_id INT NULL AFTER id`,
+		`ALTER TABLE bookings ADD KEY idx_event_date_id (event_date_id)`,
+		`ALTER TABLE settings ADD COLUMN default_event_date_id INT NULL`,
 	}
 	for _, m := range optionalMigrations {
 		db.Exec(m) // Ignore errors (column/index may already exist)
@@ -234,7 +272,56 @@ func Migrate(db *sql.DB) error {
 		return fmt.Errorf("seed packs failed: %w", err)
 	}
 
+	if err := seedEventDates(db); err != nil {
+		return fmt.Errorf("seed event dates failed: %w", err)
+	}
+
 	return nil
+}
+
+// seedEventDates creates the default 2026-07-18 event date from the legacy
+// single-event settings, backfills existing bookings to it, and seeds its
+// per-date pack config from the global catalog. Idempotent.
+func seedEventDates(db *sql.DB) error {
+	const defaultDate = "2026-07-18"
+
+	// 1. Create the default date from legacy settings (open by default).
+	if _, err := db.Exec(`
+		INSERT IGNORE INTO event_opening_dates
+			(event_date, is_open, max_capacity, adult_price_cents, child_price_cents,
+			 early_bird_count, early_bird_discount_percent,
+			 max_individual_adult_tickets, max_individual_child_tickets)
+		SELECT ?, TRUE, max_capacity, adult_price_cents, child_price_cents,
+			early_bird_count, early_bird_discount_percent,
+			max_individual_adult_tickets, max_individual_child_tickets
+		FROM settings WHERE id = 1`, defaultDate); err != nil {
+		return err
+	}
+
+	// Resolve its id (needed for backfill + pointer + pack seed).
+	var dateID int
+	if err := db.QueryRow(`SELECT id FROM event_opening_dates WHERE event_date = ?`, defaultDate).Scan(&dateID); err != nil {
+		return err
+	}
+
+	// 2. Point settings default at it, and backfill bookings with no date.
+	if _, err := db.Exec(`UPDATE settings SET default_event_date_id = ? WHERE id = 1 AND default_event_date_id IS NULL`, dateID); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE bookings SET event_date_id = ? WHERE event_date_id IS NULL`, dateID); err != nil {
+		return err
+	}
+
+	// 3. Seed per-date pack config from the global catalog + legacy limits.
+	// INSERT IGNORE on (event_date_id, pack_id) so re-runs and admin edits persist.
+	_, err := db.Exec(`
+		INSERT IGNORE INTO event_date_packs
+			(event_date_id, pack_id, active, price_cents, max_enabled, max_tickets)
+		SELECT ?, p.id, p.active, p.price_cents,
+			COALESCE(l.enabled, FALSE), COALESCE(l.max_tickets, 0)
+		FROM packs p
+		LEFT JOIN packs_max_limits l ON l.pack_id = p.id`, dateID)
+	return err
 }
 
 // seedPack describes the default data for a special booking pack.

@@ -19,6 +19,7 @@ var upgrader = websocket.Upgrader{
 
 type CapacityUpdate struct {
 	Type             string `json:"type"`
+	DateID           int    `json:"dateId"`
 	MaxCapacity      int    `json:"maxCapacity"`
 	SoldTickets      int    `json:"soldTickets"`
 	AvailableTickets int    `json:"availableTickets"`
@@ -76,9 +77,10 @@ func (h *Hub) Run() {
 	}
 }
 
-func (h *Hub) BroadcastCapacity(maxCapacity, soldTickets, availableTickets int) {
+func (h *Hub) BroadcastCapacity(dateID, maxCapacity, soldTickets, availableTickets int) {
 	update := CapacityUpdate{
 		Type:             "capacity.updated",
+		DateID:           dateID,
 		MaxCapacity:      maxCapacity,
 		SoldTickets:      soldTickets,
 		AvailableTickets: availableTickets,

@@ -112,10 +112,38 @@ type PackInput struct {
 	MaxTickets       int      `json:"maxTickets"`
 }
 
+// EventDate represents one openable event day with its own capacity/prices/limits.
+type EventDate struct {
+	ID                        int       `json:"id"`
+	EventDate                 string    `json:"eventDate"` // YYYY-MM-DD
+	IsOpen                    bool      `json:"isOpen"`
+	MaxCapacity               int       `json:"maxCapacity"`
+	AdultPriceCents           int       `json:"adultPriceCents"`
+	ChildPriceCents           int       `json:"childPriceCents"`
+	EarlyBirdCount            int       `json:"earlyBirdCount"`
+	EarlyBirdDiscountPercent  int       `json:"earlyBirdDiscountPercent"`
+	MaxIndividualAdultTickets int       `json:"maxIndividualAdultTickets"`
+	MaxIndividualChildTickets int       `json:"maxIndividualChildTickets"`
+	CreatedAt                 time.Time `json:"createdAt"`
+	UpdatedAt                 time.Time `json:"updatedAt"`
+}
+
+// EventDatePack is the per-date configuration for a pack (price/active/limits).
+type EventDatePack struct {
+	ID          int    `json:"id"`
+	EventDateID int    `json:"eventDateId"`
+	PackID      string `json:"packId"`
+	Active      bool   `json:"active"`
+	PriceCents  int    `json:"priceCents"`
+	MaxEnabled  bool   `json:"maxEnabled"`
+	MaxTickets  int    `json:"maxTickets"`
+}
+
 // Booking represents a ticket reservation in the database.
 // Bookings go through states: pending -> paid (or failed/refunded).
 type Booking struct {
 	ID                      string         `json:"id"`                      // UUID primary key
+	EventDateID             sql.NullInt64  `json:"eventDateId"`             // FK to event_opening_dates
 	Name                    string         `json:"name"`                    // Buyer's first name
 	Surname                 string         `json:"surname"`                 // Buyer's last name
 	Email                   string         `json:"email"`                   // Buyer's email
@@ -234,6 +262,7 @@ type CreateBookingRequest struct {
 	HasPremiumPass   bool                 `json:"hasPremiumPass"`
 	Items            []BookingItemInput   `json:"items"`
 	MemberAllergies  []MemberAllergyInput `json:"memberAllergies"`
+	EventDateID      int                  `json:"eventDateId"` // 0 = use default_event_date_id
 }
 
 // UpdateBookingRequest is the payload for updating a booking (admin).

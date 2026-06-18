@@ -3,6 +3,7 @@ import authReducer from './authSlice';
 import kpisReducer from './kpisSlice';
 import bookingsReducer from './bookingsSlice';
 import settingsReducer from './settingsSlice';
+import eventDatesReducer from './eventDatesSlice';
 
 export const store = configureStore({
   reducer: {
@@ -10,5 +11,6 @@ export const store = configureStore({
     kpis: kpisReducer,
     bookings: bookingsReducer,
     settings: settingsReducer,
+    eventDates: eventDatesReducer,
   },
 });

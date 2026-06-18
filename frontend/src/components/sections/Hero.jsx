@@ -33,6 +33,7 @@ export default function Hero() {
   
   // Get settings from Redux store (includes event date)
   const settings = useSelector((state) => state.settings.data);
+  const openDates = useSelector((state) => state.booking.openDates);
 
   /**
    * Preload hero images on mount and set up rotation interval.
@@ -119,7 +120,8 @@ export default function Hero() {
    */
   const formatDate = (dateString) => {
     if (!dateString) return 'Próximamente';
-    const date = new Date(dateString);
+    // dateString may be YYYY-MM-DD or RFC3339 (…T00:00:00Z); take date part only.
+    const date = new Date(dateString.slice(0, 10) + 'T00:00:00');
     return date.toLocaleDateString('es-ES', {
       weekday: 'long',
       day: 'numeric',
@@ -127,6 +129,12 @@ export default function Hero() {
       year: 'numeric',
     });
   };
+
+  const eventDateDisplay = openDates && openDates.length > 1
+    ? openDates.map((d) => formatDate(d.date)).join(' · ')
+    : (openDates && openDates.length === 1)
+      ? formatDate(openDates[0].date)
+      : formatDate(settings?.eventDate);
 
   /**
    * Smooth scrolls to the tickets section.
@@ -182,7 +190,7 @@ export default function Hero() {
         {/* Event date */}
         <div className="flex items-center justify-center gap-2 text-white/90 mb-10">
           <Calendar className="w-5 h-5 text-princess-pink" aria-hidden="true" />
-          <time dateTime={settings?.eventDate}>{formatDate(settings?.eventDate)}</time>
+          <time dateTime={settings?.eventDate}>{eventDateDisplay}</time>
         </div>
 
         {/* CTA Button */}
