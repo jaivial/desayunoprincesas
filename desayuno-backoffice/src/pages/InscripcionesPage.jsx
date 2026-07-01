@@ -157,6 +157,23 @@ export default function InscripcionesPage() {
     return `${d}/${m}/${y}`;
   };
 
+  const updateLabels = {
+    awaiting_payment: { label: 'Cambio pendiente', cls: 'bg-amber-100 text-amber-700' },
+    paid: { label: 'Cambio pagado', cls: 'bg-green-100 text-green-700' },
+    manual: { label: 'Cambio manual', cls: 'bg-blue-100 text-blue-700' },
+  };
+
+  const BookingUpdateBadge = ({ b }) => {
+    const status = b.bookingUpdateStatus;
+    if (!status) return <span className="text-gray-300 text-xs">—</span>;
+    const info = updateLabels[status] || { label: status, cls: 'bg-gray-100 text-gray-600' };
+    return (
+      <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${info.cls}`}>
+        {info.label}
+      </span>
+    );
+  };
+
   const hasActiveFilters = Object.values(localFilters).some(v => v !== '');
 
   const AllergyBadge = ({ booking }) => {
@@ -235,6 +252,7 @@ export default function InscripcionesPage() {
           {b.confirmedAssistance && (
             <span className="px-2 py-1 bg-teal-100 text-teal-700 rounded-full text-xs">Asistió</span>
           )}
+          <BookingUpdateBadge b={b} />
         </div>
         <span className="text-xs text-gray-400">{formatDate(b.createdAt)}</span>
         {b.eventDate && (
@@ -340,6 +358,7 @@ export default function InscripcionesPage() {
                   <th className="text-right py-3 px-2 font-semibold">Importe</th>
                   <th className="text-left py-3 px-2 font-semibold">Fecha reserva</th>
                   <th className="text-left py-3 px-2 font-semibold">Día evento</th>
+                  <th className="text-center py-3 px-2 font-semibold">Cambios</th>
                   <th className="text-center py-3 px-2 font-semibold">Asist.</th>
                   <th className="text-right py-3 px-2 font-semibold">Acciones</th>
                 </tr>
@@ -373,6 +392,7 @@ export default function InscripcionesPage() {
                     <td className="py-3 px-2 text-right font-medium">{(b.totalAmountCents / 100).toFixed(2)}€</td>
                     <td className="py-3 px-2 text-gray-600 text-xs">{formatDate(b.createdAt)}</td>
                     <td className="py-3 px-2 text-gray-600 text-xs">{formatEventDate(b.eventDate)}</td>
+                    <td className="py-3 px-2 text-center"><BookingUpdateBadge b={b} /></td>
                     <td className="py-3 px-2 text-center">
                       {b.confirmedAssistance ? (
                         <span className="inline-flex items-center justify-center w-6 h-6 bg-green-100 rounded-full"><Check className="w-4 h-4 text-green-600" /></span>

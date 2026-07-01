@@ -141,6 +141,8 @@ export default function EditBookingPage() {
   const [packChangeLoading, setPackChangeLoading] = useState(false);
   const [packChangeResult, setPackChangeResult] = useState(null);
   const [manualPaymentMethod, setManualPaymentMethod] = useState('');
+  const [bookingUpdates, setBookingUpdates] = useState([]);
+  const [updatesLoading, setUpdatesLoading] = useState(false);
 
   useEffect(() => {
     if (bookings.length === 0) {
@@ -187,6 +189,26 @@ export default function EditBookingPage() {
     };
     fetchPacks();
   }, [id, form]);
+
+  // Fetch booking updates
+  useEffect(() => {
+    if (!id) return;
+    const fetchUpdates = async () => {
+      setUpdatesLoading(true);
+      try {
+        const res = await fetch(`${API_URL}/api/admin/bookings/${id}/updates`, {
+          headers: { ...getAuthHeaders() },
+        });
+        if (res.ok) {
+          setBookingUpdates(await res.json());
+        }
+      } catch (err) {
+        console.error('Failed to fetch updates:', err);
+      }
+      setUpdatesLoading(false);
+    };
+    fetchUpdates();
+  }, [id]);
 
   // Fetch allergies
   useEffect(() => {
@@ -466,6 +488,46 @@ export default function EditBookingPage() {
                 </button>
               </div>
             </div>
+
+            {/* Booking Update History */}
+            {bookingUpdates.length > 0 && (
+              <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg space-y-3">
+                <h2 className="text-base font-semibold text-gray-700 flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4" />
+                  Historial de cambios de pack
+                </h2>
+                <div className="space-y-2">
+                  {bookingUpdates.map((u) => {
+                    const statusInfo = {
+                      awaiting_payment: { label: 'Pendiente de pago', cls: 'bg-amber-100 text-amber-700' },
+                      paid: { label: 'Pagado', cls: 'bg-green-100 text-green-700' },
+                      manual: { label: `Pagado manual (${u.paymentMethod || '—'})`, cls: 'bg-blue-100 text-blue-700' },
+                    }[u.status] || { label: u.status, cls: 'bg-gray-100 text-gray-600' };
+                    const diffEuros = (u.differenceCents / 100).toFixed(2);
+                    return (
+                      <div key={u.id} className="flex items-start justify-between p-3 bg-white rounded-lg text-sm border">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-800">
+                            {u.oldPackName || u.oldPackType} → {u.newPackName || u.newPackType}
+                          </p>
+                          <p className="text-gray-500 text-xs mt-1">
+                            {new Date(u.createdAt).toLocaleString('es-ES')}
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0 ml-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusInfo.cls}`}>
+                            {statusInfo.label}
+                          </span>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {u.differenceCents > 0 ? `+${diffEuros}€` : `${diffEuros}€`}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Personal info */}
             <div>

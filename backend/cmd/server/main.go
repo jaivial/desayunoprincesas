@@ -155,6 +155,12 @@ func adminBookingRouter(h *handlers.Handler) http.HandlerFunc {
 				return
 			}
 		}
+		if strings.HasSuffix(r.URL.Path, "/updates") {
+			if r.Method == "GET" {
+				h.GetBookingUpdates(w, r)
+				return
+			}
+		}
 		switch r.Method {
 		case "GET":
 			h.GetBookingAdmin(w, r)

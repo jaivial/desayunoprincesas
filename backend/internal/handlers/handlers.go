@@ -987,7 +987,10 @@ func (h *Handler) GetKPIs(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 	query := `SELECT b.id, b.name, b.surname, b.email, b.phone_country_code, b.phone_number, b.adults_count, b.children_count, b.pack_type, b.has_photographer, b.has_premium_pass, b.total_amount_cents, b.payment_status, b.payment_method, b.confirmed_assistance, b.created_at,
 		(SELECT COUNT(*) FROM member_allergies ma WHERE ma.booking_id = b.id) as allergy_count,
-		DATE_FORMAT(eod.event_date, '%Y-%m-%d')
+		DATE_FORMAT(eod.event_date, '%Y-%m-%d'),
+		COALESCE((SELECT bu2.status FROM booking_updates bu2 WHERE bu2.booking_id = b.id ORDER BY bu2.created_at DESC LIMIT 1), ''),
+		COALESCE((SELECT bu3.payment_method FROM booking_updates bu3 WHERE bu3.booking_id = b.id ORDER BY bu3.created_at DESC LIMIT 1), ''),
+		COALESCE((SELECT bu4.new_pack_type FROM booking_updates bu4 WHERE bu4.booking_id = b.id ORDER BY bu4.created_at DESC LIMIT 1), '')
 		FROM bookings b
 		LEFT JOIN event_opening_dates eod ON eod.id = b.event_date_id
 		WHERE b.deleted_at IS NULL`
@@ -1038,8 +1041,8 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var b models.Booking
 		var allergyCount int
-		var eventDateCol sql.NullString
-		err := rows.Scan(&b.ID, &b.Name, &b.Surname, &b.Email, &b.PhoneCountryCode, &b.PhoneNumber, &b.AdultsCount, &b.ChildrenCount, &b.PackType, &b.HasPhotographer, &b.HasPremiumPass, &b.TotalAmountCents, &b.PaymentStatus, &b.PaymentMethod, &b.ConfirmedAssistance, &b.CreatedAt, &allergyCount, &eventDateCol)
+		var eventDateCol, updateStatus, updatePaymentMethod, updateNewPackType sql.NullString
+		err := rows.Scan(&b.ID, &b.Name, &b.Surname, &b.Email, &b.PhoneCountryCode, &b.PhoneNumber, &b.AdultsCount, &b.ChildrenCount, &b.PackType, &b.HasPhotographer, &b.HasPremiumPass, &b.TotalAmountCents, &b.PaymentStatus, &b.PaymentMethod, &b.ConfirmedAssistance, &b.CreatedAt, &allergyCount, &eventDateCol, &updateStatus, &updatePaymentMethod, &updateNewPackType)
 		if err != nil {
 			continue
 		}
@@ -1059,6 +1062,15 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 			"allergyCount":        allergyCount,
 			"hasPhotographer":     b.HasPhotographer,
 			"hasPremiumPass":      b.HasPremiumPass,
+		}
+		if updateStatus.Valid && updateStatus.String != "" {
+			booking["bookingUpdateStatus"] = updateStatus.String
+		}
+		if updatePaymentMethod.Valid {
+			booking["bookingUpdatePaymentMethod"] = updatePaymentMethod.String
+		}
+		if updateNewPackType.Valid {
+			booking["bookingUpdateNewPackType"] = updateNewPackType.String
 		}
 		if eventDateCol.Valid {
 			booking["eventDate"] = eventDateCol.String
@@ -2279,4 +2291,59 @@ func (h *Handler) handleBookingUpdatePayment(sess *stripe.CheckoutSession) {
 	}
 
 	log.Printf("Booking update %s applied: booking %s pack changed to %s", token, update.BookingID, update.NewPackType)
+}
+
+// GetBookingUpdates returns booking_updates for a specific booking (admin).
+func (h *Handler) GetBookingUpdates(w http.ResponseWriter, r *http.Request) {
+	bookingID := extractID(r.URL.Path, "/api/admin/bookings/")
+	bookingID = strings.TrimSuffix(bookingID, "/updates")
+	if bookingID == "" {
+		h.respondError(w, http.StatusBadRequest, "Missing booking ID")
+		return
+	}
+
+	rows, err := h.db.Query(`SELECT bu.id, bu.booking_id, bu.old_pack_type, bu.new_pack_type,
+		bu.old_price_cents, bu.new_price_cents, bu.difference_cents, bu.status,
+		COALESCE(bu.payment_method, ''), bu.created_at, bu.updated_at,
+		COALESCE(op.name, ''), COALESCE(np.name, '')
+		FROM booking_updates bu
+		LEFT JOIN packs op ON op.id = bu.old_pack_type
+		LEFT JOIN packs np ON np.id = bu.new_pack_type
+		WHERE bu.booking_id = ?
+		ORDER BY bu.created_at DESC`, bookingID)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to get booking updates")
+		return
+	}
+	defer rows.Close()
+
+	var updates []map[string]interface{}
+	for rows.Next() {
+		var id, oldPriceCents, newPriceCents, diffCents int
+		var bookingID, oldPackType, newPackType, status, paymentMethod, createdAt, updatedAt, oldPackName, newPackName string
+		if err := rows.Scan(&id, &bookingID, &oldPackType, &newPackType,
+			&oldPriceCents, &newPriceCents, &diffCents, &status,
+			&paymentMethod, &createdAt, &updatedAt, &oldPackName, &newPackName); err != nil {
+			continue
+		}
+		updates = append(updates, map[string]interface{}{
+			"id":              id,
+			"bookingId":       bookingID,
+			"oldPackType":     oldPackType,
+			"newPackType":     newPackType,
+			"oldPackName":     oldPackName,
+			"newPackName":     newPackName,
+			"oldPriceCents":   oldPriceCents,
+			"newPriceCents":   newPriceCents,
+			"differenceCents": diffCents,
+			"status":          status,
+			"paymentMethod":   paymentMethod,
+			"createdAt":       createdAt,
+			"updatedAt":       updatedAt,
+		})
+	}
+	if updates == nil {
+		updates = []map[string]interface{}{}
+	}
+	h.respondJSON(w, http.StatusOK, updates)
 }
