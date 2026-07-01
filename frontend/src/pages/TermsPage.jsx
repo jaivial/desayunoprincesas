@@ -97,6 +97,7 @@ export default function TermsPage() {
                 <li><strong>No se admitirán devoluciones</strong> de entradas una vez adquiridas, salvo cancelación total del evento por causas imputables a la organización.</li>
                 <li>En caso de fuerza mayor (ajena a la voluntad de la organización), se comunicará cualquier cambio de fecha o horario a través de los medios de contacto proporcionados en la compra.</li>
                 <li>En caso de no asistencia sin previo aviso, la reserva se considerará consumida.</li>
+                <li>El evento requiere un mínimo de <strong>30 asistentes</strong> para poder celebrarse. Si no se alcanza esta cifra, la organización se reserva el derecho de cancelar el evento. En tal caso, se devolverá el importe íntegro de las entradas adquiridas.</li>
               </ul>
             </section>
 

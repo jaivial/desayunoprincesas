@@ -279,6 +279,30 @@ type UpdateBookingRequest struct {
 	PaymentMethod *string `json:"paymentMethod"`
 }
 
+// BookingUpdate represents a requested change to a booking (pack change).
+type BookingUpdate struct {
+	ID                 int            `json:"id"`
+	BookingID          string         `json:"bookingId"`
+	OldPackType        string         `json:"oldPackType"`
+	NewPackType        string         `json:"newPackType"`
+	OldPriceCents      int            `json:"oldPriceCents"`
+	NewPriceCents      int            `json:"newPriceCents"`
+	DifferenceCents    int            `json:"differenceCents"`
+	Status             string         `json:"status"` // "awaiting_payment", "paid", "cancelled", "manual"
+	PaymentMethod      sql.NullString `json:"paymentMethod"` // "bizum", "transferencia", "efectivo"
+	StripeSessionID    sql.NullString `json:"stripeSessionId"`
+	Token              string         `json:"token"` // unique token for payment link
+	CreatedAt          time.Time      `json:"createdAt"`
+	UpdatedAt          time.Time      `json:"updatedAt"`
+}
+
+// BookingUpdateRequest is the payload for requesting a pack change.
+type BookingUpdateRequest struct {
+	NewPackType   string `json:"newPackType"`
+	NewPackName   string `json:"newPackName"`
+	PaymentMethod string `json:"paymentMethod"` // "" = Stripe, "bizum"/"transferencia"/"efectivo" = manual
+}
+
 // UpdateSettingsRequest is the payload for updating settings (admin).
 // All fields are optional (pointers).
 type UpdateSettingsRequest struct {

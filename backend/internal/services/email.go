@@ -514,3 +514,332 @@ func (s *EmailService) SendConfirmation(bookingID string) {
 
 	log.Printf("Confirmation email sent to %s", email)
 }
+
+// sendEmail sends an email using the configured provider.
+func (s *EmailService) sendEmail(to, subject, htmlBody string) error {
+	cfg, err := s.getConfig()
+	if err != nil {
+		return err
+	}
+
+	var from string
+	if cfg.provider == "gmail" && cfg.gmailUser != "" {
+		from = cfg.gmailUser
+	} else {
+		from = cfg.smtpFrom
+	}
+
+	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
+		from, to, subject, htmlBody)
+
+	var auth smtp.Auth
+	var addr string
+
+	if cfg.provider == "gmail" && cfg.gmailUser != "" && cfg.gmailAppPass != "" {
+		auth = smtp.PlainAuth("", cfg.gmailUser, cfg.gmailAppPass, "smtp.gmail.com")
+		addr = "smtp.gmail.com:587"
+	} else if cfg.smtpHost != "" && cfg.smtpPort > 0 {
+		if cfg.smtpUsername != "" && cfg.smtpPassword != "" {
+			auth = smtp.PlainAuth("", cfg.smtpUsername, cfg.smtpPassword, cfg.smtpHost)
+		}
+		addr = fmt.Sprintf("%s:%d", cfg.smtpHost, cfg.smtpPort)
+	} else {
+		return fmt.Errorf("no email configuration available")
+	}
+
+	if err := smtp.SendMail(addr, auth, from, []string{to}, []byte(message)); err != nil {
+		return err
+	}
+	log.Printf("Email sent to %s", to)
+	return nil
+}
+
+// SendPackUpdateRequest sends an email to the client with the pack change payment link.
+func (s *EmailService) SendPackUpdateRequest(bookingID, token, oldPackType, newPackType, newPackName string, differenceCents int) {
+	var name, surname, email string
+	err := s.db.QueryRow(`SELECT name, surname, email FROM bookings WHERE id = ?`, bookingID).Scan(&name, &surname, &email)
+	if err != nil {
+		log.Printf("Failed to get booking for pack update email: %v", err)
+		return
+	}
+
+	oldLabel := oldPackType
+	if pn, ok := packNames[oldPackType]; ok {
+		oldLabel = pn
+	}
+	newLabel := newPackName
+	if newLabel == "" {
+		newLabel = newPackType
+		if pn, ok := packNames[newPackType]; ok {
+			newLabel = pn
+		}
+	}
+
+	differenceEuros := float64(differenceCents) / 100
+	paymentURL := fmt.Sprintf("%s/booking-update/%s", s.cfg.FrontendURL, token)
+
+	subject := "Suplemento de pago - Cambio de pack - Desayuno con Princesas"
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5;">
+    <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background: #f5f5f5;">
+        <tr>
+            <td align="center" style="padding: 20px;">
+                <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width: 600px; width: 100%%;">
+                    <tr>
+                        <td style="background: #1a1a1a; padding: 30px 40px; text-align: center; border-radius: 12px 12px 0 0;">
+                            <img src="https://villacarmenmedia.b-cdn.net/images/icons/logoblancopng.PNG" alt="Villa Carmen" style="max-width: 180px; height: auto; margin-bottom: 15px;" />
+                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 300; letter-spacing: 1px;">Desayuno con Princesas</h1>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background: #ffffff; padding: 40px;">
+                            <p style="margin: 0 0 20px 0; font-size: 18px; color: #333;">Hola <strong>%s %s</strong>,</p>
+                            <p style="margin: 0 0 30px 0; font-size: 16px; color: #555; line-height: 1.6;">
+                                Se ha solicitado un cambio de pack en tu reserva. El nuevo pack tiene un coste adicional que requiere ser abonado.</p>
+                            
+                            <div style="background: linear-gradient(135deg, #fce4ec 0%%, #f8bbd9 100%%); padding: 25px; border-radius: 12px; margin-bottom: 25px;">
+                                <h2 style="margin: 0 0 20px 0; color: #7b1fa2; font-size: 18px;">Detalles del cambio</h2>
+                                <table role="presentation" width="100%%" cellspacing="0" cellpadding="0">
+                                    <tr>
+                                        <td style="padding: 8px 0; color: #555; font-size: 14px;">Pack actual:</td>
+                                        <td style="padding: 8px 0; color: #333; font-size: 14px; font-weight: 600; text-align: right;">%s</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; color: #555; font-size: 14px;">Nuevo pack:</td>
+                                        <td style="padding: 8px 0; color: #333; font-size: 14px; font-weight: 600; text-align: right;">%s</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 12px 0 0 0; color: #555; font-size: 14px; border-top: 1px solid rgba(123,31,162,0.2);">Suplemento a pagar:</td>
+                                        <td style="padding: 12px 0 0 0; color: #7b1fa2; font-size: 24px; font-weight: 700; text-align: right; border-top: 1px solid rgba(123,31,162,0.2);">%.2f€</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            
+                            <div style="text-align: center; margin: 30px 0;">
+                                <p style="margin: 0 0 20px 0; font-size: 14px; color: #666;">
+                                    Haz clic en el botón para completar el pago del suplemento. El cambio se aplicará automáticamente al confirmar el pago.</p>
+                                <a href="%s" style="display: inline-block; background: linear-gradient(135deg, #7b1fa2, #e91e63); color: #ffffff; text-decoration: none; padding: 15px 30px; border-radius: 25px; font-size: 16px; font-weight: 600; margin-bottom: 10px;">
+                                    Pagar %.2f€
+                                </a>
+                                <p style="margin: 10px 0 0 0; font-size: 12px; color: #999;">
+                                    O copia este enlace: <br/><a href="%s" style="color: #7b1fa2;">%s</a>
+                                </p>
+                            </div>
+                            
+                            <div style="background: #fff9fb; border: 1px solid #f8bbd9; padding: 15px 20px; border-radius: 8px; margin-top: 25px;">
+                                <p style="margin: 0; font-size: 13px; color: #831843;">
+                                    ⚠️ El cambio quedará en estado "pendiente" hasta que se complete el pago. Si no se realiza el pago, la reserva mantendrá el pack actual.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background: #fafafa; padding: 25px 40px; border-top: 1px solid #eee; text-align: center;">
+                            <p style="margin: 0 0 10px 0; font-size: 14px; color: #555;">¿Tienes alguna pregunta? Contáctanos:</p>
+                            <a href="https://wa.me/34638857294" style="display: inline-block; background: #25d366; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 20px; font-size: 13px; margin: 0 5px;">WhatsApp</a>
+                            <a href="mailto:reservas@alqueriavillacarmen.com" style="display: inline-block; background: #9b59b6; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 20px; font-size: 13px; margin: 0 5px;">Email</a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background: #1a1a1a; padding: 25px 40px; border-radius: 0 0 12px 12px; text-align: center;">
+                            <p style="margin: 0; color: #666; font-size: 11px;">
+                                © 2024 Alquería Villa Carmen. Todos los derechos reservados.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+`, name, surname, oldLabel, newLabel, differenceEuros, paymentURL, differenceEuros, paymentURL, paymentURL)
+
+	if err := s.sendEmail(email, subject, body); err != nil {
+		log.Printf("Failed to send pack update email: %v", err)
+		return
+	}
+		log.Printf("Pack update email sent to %s for booking %s", email, bookingID)
+}
+
+// SendPackUpdateConfirmation sends a full booking confirmation email with QR after a manual pack change.
+func (s *EmailService) SendPackUpdateConfirmation(bookingID, paymentMethod, oldPackType, newPackType, newPackName string, differenceCents int) {
+	var name, surname, email, qrToken string
+	var qrCodeURL sql.NullString
+	var adultsCount, childrenCount, totalAmountCents int
+	var eventDate sql.NullTime
+	var hasPhotographer, hasPremiumPass bool
+
+	err := s.db.QueryRow(`
+		SELECT b.name, b.surname, b.email, b.qr_token, b.qr_code_url,
+		       b.adults_count, b.children_count, b.has_photographer, b.has_premium_pass,
+		       b.total_amount_cents, COALESCE(eod.event_date, s.event_date)
+		FROM bookings b
+		JOIN settings s ON s.id = 1
+		LEFT JOIN event_opening_dates eod ON eod.id = b.event_date_id
+		WHERE b.id = ?
+	`, bookingID).Scan(&name, &surname, &email, &qrToken, &qrCodeURL,
+		&adultsCount, &childrenCount, &hasPhotographer, &hasPremiumPass,
+		&totalAmountCents, &eventDate)
+	if err != nil {
+		log.Printf("Failed to get booking for pack update confirmation: %v", err)
+		return
+	}
+
+	// Build pack names
+	oldLabel := oldPackType
+	if pn, ok := packNames[oldPackType]; ok {
+		oldLabel = pn
+	}
+	newLabel := newPackName
+	if newLabel == "" {
+		newLabel = newPackType
+		if pn, ok := packNames[newPackType]; ok {
+			newLabel = pn
+		}
+	}
+
+	paymentLabels := map[string]string{
+		"bizum":        "Bizum",
+		"transferencia": "Transferencia bancaria",
+		"efectivo":     "Efectivo",
+	}
+	methodLabel := paymentMethod
+	if l, ok := paymentLabels[paymentMethod]; ok {
+		methodLabel = l
+	}
+
+	eventDateStr := "Por confirmar"
+	if eventDate.Valid {
+		eventDateStr = eventDate.Time.Format("02/01/2006")
+	}
+
+	totalAmount := float64(totalAmountCents) / 100
+	differenceEuros := float64(differenceCents) / 100
+
+	subject := "Confirmación de cambio de pack - Desayuno con Princesas"
+
+	// Build QR section
+	var qrSection string
+	if qrCodeURL.Valid && qrCodeURL.String != "" {
+		qrSection = fmt.Sprintf(`
+			<div style="text-align: center; margin: 30px 0; padding: 20px; background: #fff9fb; border-radius: 12px;">
+				<p style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: #333;">Tu código QR de acceso</p>
+				<img src="%s" alt="Código QR" style="width: 250px; height: 250px; border: 4px solid #d4a5c9; border-radius: 8px;" />
+				<p style="margin: 15px 0 0 0; font-size: 12px; color: #888;">Código: %s</p>
+			</div>
+`, qrCodeURL.String, qrToken[:8])
+	} else {
+		qrSection = fmt.Sprintf(`
+			<div style="text-align: center; margin: 30px 0; padding: 20px; background: #fff9fb; border-radius: 12px;">
+				<p style="margin: 0 0 10px 0; font-size: 16px; font-weight: 600; color: #333;">Tu código de acceso</p>
+				<p style="margin: 0; font-size: 28px; font-weight: bold; color: #9b59b6; letter-spacing: 2px;">%s</p>
+			</div>
+`, qrToken[:8])
+	}
+
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5;">
+    <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background: #f5f5f5;">
+        <tr>
+            <td align="center" style="padding: 20px;">
+                <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width: 600px; width: 100%%;">
+                    <tr>
+                        <td style="background: #1a1a1a; padding: 30px 40px; text-align: center; border-radius: 12px 12px 0 0;">
+                            <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 300; letter-spacing: 1px;">Desayuno con Princesas</h1>
+                            <p style="margin: 10px 0 0 0; color: #d4a5c9; font-size: 14px;">Reserva actualizada</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background: #ffffff; padding: 40px;">
+                            <p style="margin: 0 0 20px 0; font-size: 18px; color: #333;">Hola <strong>%s %s</strong>,</p>
+                            <p style="margin: 0 0 30px 0; font-size: 16px; color: #555; line-height: 1.6;">Tu reserva ha sido actualizada. A continuación te mostramos los cambios realizados y los detalles actualizados de tu reserva.</p>
+
+                            <div style="background: linear-gradient(135deg, #e8f5e9, #c8e6c9); padding: 25px; border-radius: 12px; margin-bottom: 25px;">
+                                <h2 style="margin: 0 0 15px 0; color: #2e7d32; font-size: 18px;">✅ Cambio de pack realizado</h2>
+                                <table role="presentation" width="100%%" cellspacing="0" cellpadding="0">
+                                    <tr>
+                                        <td style="padding: 5px 0; color: #555; font-size: 14px;">Pack anterior:</td>
+                                        <td style="padding: 5px 0; color: #333; font-size: 14px; font-weight: 600; text-align: right;">%s</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 5px 0; color: #555; font-size: 14px;">Nuevo pack:</td>
+                                        <td style="padding: 5px 0; color: #2e7d32; font-size: 14px; font-weight: 600; text-align: right;">%s</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; color: #555; font-size: 14px;">Suplemento abonado:</td>
+                                        <td style="padding: 8px 0; color: #2e7d32; font-size: 16px; font-weight: 700; text-align: right;">%.2f€</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 5px 0; color: #555; font-size: 14px;">Método de pago:</td>
+                                        <td style="padding: 5px 0; color: #333; font-size: 14px; font-weight: 600; text-align: right;">%s</td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            <div style="background: linear-gradient(135deg, #fce4ec 0%%, #f8bbd9 100%%); padding: 25px; border-radius: 12px; margin-bottom: 25px;">
+                                <h2 style="margin: 0 0 20px 0; color: #7b1fa2; font-size: 18px;">Detalles actualizados de tu Reserva</h2>
+                                <table role="presentation" width="100%%" cellspacing="0" cellpadding="0">
+                                    <tr>
+                                        <td style="padding: 8px 0; color: #555; font-size: 14px;">Fecha del evento:</td>
+                                        <td style="padding: 8px 0; color: #333; font-size: 14px; font-weight: 600; text-align: right;">%s</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; color: #555; font-size: 14px;">Entradas adulto:</td>
+                                        <td style="padding: 8px 0; color: #333; font-size: 14px; font-weight: 600; text-align: right;">%d</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; color: #555; font-size: 14px;">Entradas niño/a:</td>
+                                        <td style="padding: 8px 0; color: #333; font-size: 14px; font-weight: 600; text-align: right;">%d</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 12px 0 0 0; color: #555; font-size: 14px; border-top: 1px solid rgba(123,31,162,0.2);">Total pagado:</td>
+                                        <td style="padding: 12px 0 0 0; color: #7b1fa2; font-size: 18px; font-weight: 700; text-align: right; border-top: 1px solid rgba(123,31,162,0.2);">%.2f€</td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            %s
+
+                            <p style="margin: 0; font-size: 14px; color: #666; text-align: center; font-style: italic;">
+                                Presenta este código QR en la entrada del evento
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background: #fafafa; padding: 25px 40px; border-top: 1px solid #eee; text-align: center;">
+                            <p style="margin: 0 0 15px 0; font-size: 14px; color: #555;">¿Tienes alguna pregunta? Contáctanos:</p>
+                            <a href="https://wa.me/34638857294" style="display: inline-block; background: #25d366; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 20px; font-size: 13px; margin: 0 5px;">WhatsApp</a>
+                            <a href="mailto:reservas@alqueriavillacarmen.com" style="display: inline-block; background: #9b59b6; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 20px; font-size: 13px; margin: 0 5px;">Email</a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background: #1a1a1a; padding: 25px 40px; border-radius: 0 0 12px 12px; text-align: center;">
+                            <p style="margin: 0; color: #666; font-size: 11px;">© 2024 Alquería Villa Carmen. Todos los derechos reservados.</p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+`, name, surname, oldLabel, newLabel, differenceEuros, methodLabel, eventDateStr, adultsCount, childrenCount, totalAmount, qrSection)
+
+	if err := s.sendEmail(email, subject, body); err != nil {
+		log.Printf("Failed to send pack update confirmation: %v", err)
+		return
+	}
+	log.Printf("Pack update confirmation sent to %s for booking %s", email, bookingID)
+}

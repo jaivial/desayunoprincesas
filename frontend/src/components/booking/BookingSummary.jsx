@@ -246,7 +246,7 @@ export default function BookingSummary() {
             </div>
           </div>
           <span className="text-white/70 text-sm">
-            He leído y acepto la <a href="#" className="text-princess-pink hover:underline">Política de Privacidad</a>
+            He leído y acepto la <a href="/privacidad" className="text-princess-pink hover:underline">Política de Privacidad</a>
           </span>
         </label>
 
@@ -265,7 +265,7 @@ export default function BookingSummary() {
             </div>
           </div>
           <span className="text-white/70 text-sm">
-            Acepto los <a href="#" className="text-princess-pink hover:underline">Términos y Condiciones</a>
+            Acepto los <a href="/terminos" className="text-princess-pink hover:underline">Términos y Condiciones</a>
           </span>
         </label>
       </div>

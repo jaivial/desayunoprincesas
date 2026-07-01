@@ -53,6 +53,7 @@ func main() {
 	mux.HandleFunc("/api/public/bookings/", h.GetBooking)
 	mux.HandleFunc("/api/public/verify-session/", methodHandler("GET", h.VerifyStripeSession))
 	mux.HandleFunc("/api/public/stripe/checkout", rateLimitHandler(checkoutLimiter, methodHandler("POST", h.CreateStripeCheckout)))
+	mux.HandleFunc("/api/public/booking-update/", methodHandler("GET", h.GetBookingUpdate))
 
 	// Auth routes
 	mux.HandleFunc("/api/auth/login", methodHandler("POST", h.Login))
@@ -139,6 +140,18 @@ func adminBookingRouter(h *handlers.Handler) http.HandlerFunc {
 				return
 			case "PUT", "POST":
 				h.UpdateBookingAllergies(w, r)
+				return
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/packs") {
+			if r.Method == "GET" {
+				h.GetBookingPacks(w, r)
+				return
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/request-pack-update") {
+			if r.Method == "POST" {
+				h.RequestPackUpdate(w, r)
 				return
 			}
 		}

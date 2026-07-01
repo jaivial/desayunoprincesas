@@ -480,8 +480,12 @@ func (h *Handler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	qrToken := uuid.New().String()
 
-	_, err = h.db.Exec(`INSERT INTO bookings (id, name, surname, email, phone_country_code, phone_number, adults_count, children_count, has_photographer, has_premium_pass, adult_price_cents, child_price_cents, total_amount_cents, qr_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, req.Name, req.Surname, req.Email, req.PhoneCountryCode, req.PhoneNumber, cart.TotalAdults, cart.TotalChildren, hasPhotographer, hasPremiumPass, cart.AdultPriceCents, cart.ChildPriceCents, cart.TotalAmountCents, qrToken,
+	var eventDateIDArg interface{}
+	if req.EventDateID > 0 {
+		eventDateIDArg = req.EventDateID
+	}
+	_, err = h.db.Exec(`INSERT INTO bookings (id, event_date_id, name, surname, email, phone_country_code, phone_number, adults_count, children_count, has_photographer, has_premium_pass, adult_price_cents, child_price_cents, total_amount_cents, qr_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, eventDateIDArg, req.Name, req.Surname, req.Email, req.PhoneCountryCode, req.PhoneNumber, cart.TotalAdults, cart.TotalChildren, hasPhotographer, hasPremiumPass, cart.AdultPriceCents, cart.ChildPriceCents, cart.TotalAmountCents, qrToken,
 	)
 	if err != nil {
 		h.respondError(w, http.StatusInternalServerError, "Failed to create booking")
@@ -510,9 +514,11 @@ func (h *Handler) GetBooking(w http.ResponseWriter, r *http.Request) {
 		SELECT b.id, b.name, b.surname, b.email, b.phone_country_code, b.phone_number, 
 		       b.adults_count, b.children_count, b.adult_price_cents, b.child_price_cents, 
 		       b.total_amount_cents, b.payment_status, b.payment_method, b.qr_token, 
-		       b.confirmed_assistance, b.created_at, s.event_date
+		       b.confirmed_assistance, b.created_at,
+		       COALESCE(eod.event_date, s.event_date)
 		FROM bookings b
 		JOIN settings s ON s.id = 1
+		LEFT JOIN event_opening_dates eod ON eod.id = b.event_date_id
 		WHERE (b.id = ? OR b.stripe_checkout_session_id = ?) AND b.deleted_at IS NULL
 	`, id, id).Scan(
 		&booking.ID, &booking.Name, &booking.Surname, &booking.Email,
@@ -717,6 +723,12 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		var sess stripe.CheckoutSession
 		if err := json.Unmarshal(event.Data.Raw, &sess); err != nil {
 			log.Printf("Failed to parse checkout session: %v", err)
+			break
+		}
+
+		// Handle booking_update payments (pack change price difference)
+		if sess.Metadata["type"] == "booking_update" {
+			h.handleBookingUpdatePayment(&sess)
 			break
 		}
 
@@ -1868,4 +1880,403 @@ func (h *Handler) GetPublicEventDates(w http.ResponseWriter, r *http.Request) {
 		dates = []map[string]interface{}{}
 	}
 	h.respondJSON(w, http.StatusOK, dates)
+}
+
+// =============================================================================
+// BOOKING UPDATE HANDLERS (pack change with price difference)
+// =============================================================================
+
+// GetBookingPacks returns available packs for the booking's event date (admin).
+func (h *Handler) GetBookingPacks(w http.ResponseWriter, r *http.Request) {
+	bookingID := extractID(r.URL.Path, "/api/admin/bookings/")
+	bookingID = strings.TrimSuffix(bookingID, "/packs")
+	if bookingID == "" {
+		h.respondError(w, http.StatusBadRequest, "Missing booking ID")
+		return
+	}
+
+	// Get booking's event_date_id and current pack info
+	var eventDateID sql.NullInt64
+	var packType sql.NullString
+	err := h.db.QueryRow(`SELECT event_date_id, pack_type FROM bookings WHERE id = ? AND deleted_at IS NULL`, bookingID).Scan(&eventDateID, &packType)
+	if err == sql.ErrNoRows {
+		h.respondError(w, http.StatusNotFound, "Booking not found")
+		return
+	}
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to get booking")
+		return
+	}
+
+	var dID int
+	if eventDateID.Valid {
+		dID = int(eventDateID.Int64)
+	}
+
+	// Load packs scoped to this date (or global if no date)
+	packs, err := h.getPacksForDate(dID)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to get packs")
+		return
+	}
+
+	// Get booking items to find the current pack and its price
+	var currentPackID string
+	var currentPackName string
+	var currentPriceCents int
+	if packType.Valid {
+		currentPackID = packType.String
+	}
+
+	// prefer booking_items for accurate price
+	err = h.db.QueryRow(`SELECT COALESCE(pack_type, ''), COALESCE(pack_name, ''), COALESCE(unit_price_cents, 0)
+		FROM booking_items WHERE booking_id = ? AND item_type = 'pack' LIMIT 1`, bookingID).Scan(&currentPackID, &currentPackName, &currentPriceCents)
+	if err != nil && currentPackID == "" {
+		if packType.Valid {
+			currentPackID = packType.String
+		}
+	}
+
+	// Build response: packs with their per-date prices
+	type packItem struct {
+		ID              string  `json:"id"`
+		Name            string  `json:"name"`
+		PriceCents      int     `json:"priceCents"`
+		Price           float64 `json:"price"`
+		Adults          int     `json:"adults"`
+		Children        int     `json:"children"`
+		Active          bool    `json:"active"`
+		HasPhotographer bool    `json:"hasPhotographer"`
+		HasPremiumPass  bool    `json:"hasPremiumPass"`
+	}
+	var result []packItem
+	for _, p := range packs {
+		result = append(result, packItem{
+			ID:              p.ID,
+			Name:            p.Name,
+			PriceCents:      p.PriceCents,
+			Price:           p.Price,
+			Adults:          p.Adults,
+			Children:        p.Children,
+			Active:          p.Active,
+			HasPhotographer: p.HasPhotographer,
+			HasPremiumPass:  p.HasPremiumPass,
+		})
+	}
+
+	h.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"currentPackId":     currentPackID,
+		"currentPackName":   currentPackName,
+		"currentPriceCents": currentPriceCents,
+		"eventDateId":       dID,
+		"packs":             result,
+	})
+}
+
+// RequestPackUpdate creates a booking_update record with status 'awaiting_payment'
+// and sends an email to the client to pay the price difference (admin).
+func (h *Handler) RequestPackUpdate(w http.ResponseWriter, r *http.Request) {
+	bookingID := extractID(r.URL.Path, "/api/admin/bookings/")
+	bookingID = strings.TrimSuffix(bookingID, "/request-pack-update")
+	if bookingID == "" {
+		h.respondError(w, http.StatusBadRequest, "Missing booking ID")
+		return
+	}
+
+	var req models.BookingUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if req.NewPackType == "" {
+		h.respondError(w, http.StatusBadRequest, "newPackType is required")
+		return
+	}
+
+	// Get booking info
+	var bookingName, bookingSurname, bookingEmail, oldPackType string
+	var oldPackNameDB sql.NullString
+	var eventDateID sql.NullInt64
+	var oldPriceCents int
+	err := h.db.QueryRow(`
+		SELECT b.name, b.surname, b.email,
+		       COALESCE(b.pack_type, bi.pack_type, ''),
+		       COALESCE(bi.pack_name, ''), COALESCE(bi.unit_price_cents, 0),
+		       b.event_date_id
+		FROM bookings b
+		LEFT JOIN booking_items bi ON bi.booking_id = b.id AND bi.item_type = 'pack'
+		WHERE b.id = ? AND b.deleted_at IS NULL
+		LIMIT 1`, bookingID).Scan(&bookingName, &bookingSurname, &bookingEmail,
+		&oldPackType, &oldPackNameDB, &oldPriceCents, &eventDateID)
+	if err == sql.ErrNoRows {
+		h.respondError(w, http.StatusNotFound, "Booking not found")
+		return
+	}
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to get booking")
+		return
+	}
+	if oldPackType == "" {
+		h.respondError(w, http.StatusBadRequest, "Booking has no pack to change")
+		return
+	}
+
+	// Get new pack info slogged to the event date
+	newPack := h.getPackInfo(req.NewPackType)
+	if newPack == nil {
+		h.respondError(w, http.StatusBadRequest, "Invalid pack type")
+		return
+	}
+
+	// Get per-date price for the new pack
+	var dID int
+	if eventDateID.Valid {
+		dID = int(eventDateID.Int64)
+	}
+	newPriceCents := newPack.PriceCents
+	if dID > 0 {
+		h.db.QueryRow(`SELECT price_cents FROM event_date_packs WHERE event_date_id = ? AND pack_id = ? AND active = TRUE`,
+			dID, req.NewPackType).Scan(&newPriceCents)
+	}
+
+	differenceCents := newPriceCents - oldPriceCents
+
+	// If price is same or lower, apply directly (no Stripe needed)
+	if differenceCents <= 0 {
+		// Direct update: change pack in booking
+		h.db.Exec(`UPDATE bookings SET pack_type = ? WHERE id = ?`, req.NewPackType, bookingID)
+		// Update booking_items
+		h.db.Exec(`DELETE FROM booking_items WHERE booking_id = ? AND item_type = 'pack'`, bookingID)
+		h.db.Exec(`INSERT INTO booking_items (booking_id, item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents)
+			VALUES (?, 'pack', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			bookingID, newPack.ID, newPack.Name, newPack.Adults, newPack.Children,
+			newPack.HasPhotographer, newPack.HasPremiumPass, newPriceCents, newPriceCents)
+		h.respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":          "updated",
+			"differenceCents": 0,
+			"message":         "Pack actualizado sin coste adicional",
+		})
+		return
+	}
+
+	// Price is higher: check payment method
+	isManual := req.PaymentMethod == "bizum" || req.PaymentMethod == "transferencia" || req.PaymentMethod == "efectivo"
+	if isManual {
+		// Manual payment: apply directly + send confirmation email with QR
+		token := uuid.New().String()
+		_, err = h.db.Exec(`INSERT INTO booking_updates (booking_id, old_pack_type, new_pack_type, old_price_cents, new_price_cents, difference_cents, status, payment_method, token)
+			VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, ?)`,
+			bookingID, oldPackType, req.NewPackType, oldPriceCents, newPriceCents, differenceCents, req.PaymentMethod, token)
+		if err != nil {
+			h.respondError(w, http.StatusInternalServerError, "Failed to create booking update")
+			return
+		}
+
+		h.db.Exec(`UPDATE bookings SET pack_type = ? WHERE id = ?`, req.NewPackType, bookingID)
+		h.db.Exec(`DELETE FROM booking_items WHERE booking_id = ? AND item_type = 'pack'`, bookingID)
+		h.db.Exec(`INSERT INTO booking_items (booking_id, item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents)
+			VALUES (?, 'pack', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			bookingID, newPack.ID, newPack.Name, newPack.Adults, newPack.Children,
+			newPack.HasPhotographer, newPack.HasPremiumPass, newPriceCents, newPriceCents)
+
+		// Generate QR if missing, then send confirmation email (in order)
+		go func(bid, method, oldP, newP, newPN string, diff int) {
+			if _, err := h.qr.GetQRCodeURL(bid); err != nil {
+				log.Printf("Failed to generate QR for booking %s: %v", bid, err)
+			}
+			h.email.SendPackUpdateConfirmation(bid, method, oldP, newP, newPN, diff)
+		}(bookingID, req.PaymentMethod, oldPackType, req.NewPackType, req.NewPackName, differenceCents)
+
+		h.respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":          "updated",
+			"paymentMethod":   req.PaymentMethod,
+			"differenceCents": differenceCents,
+			"message":         "Pack actualizado. Email de confirmación enviado al cliente.",
+		})
+		return
+	}
+
+	// Stripe payment: create booking_update record + send email with payment link
+	token := uuid.New().String()
+	_, err = h.db.Exec(`INSERT INTO booking_updates (booking_id, old_pack_type, new_pack_type, old_price_cents, new_price_cents, difference_cents, status, token)
+		VALUES (?, ?, ?, ?, ?, ?, 'awaiting_payment', ?)`,
+		bookingID, oldPackType, req.NewPackType, oldPriceCents, newPriceCents, differenceCents, token)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to create booking update")
+		return
+	}
+
+	go h.email.SendPackUpdateRequest(bookingID, token, oldPackType, req.NewPackType, req.NewPackName, differenceCents)
+
+	h.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":          "awaiting_payment",
+		"token":           token,
+		"differenceCents": differenceCents,
+		"message":         "Email enviado al cliente para completar el pago",
+	})
+}
+
+// GetBookingUpdate returns a booking update by token and creates a Stripe checkout if needed.
+func (h *Handler) GetBookingUpdate(w http.ResponseWriter, r *http.Request) {
+	token := extractID(r.URL.Path, "/api/public/booking-update/")
+	if token == "" {
+		h.respondError(w, http.StatusBadRequest, "Missing token")
+		return
+	}
+
+	var update models.BookingUpdate
+	var bookingName, bookingEmail string
+	var oldPackName, newPackName sql.NullString
+	err := h.db.QueryRow(`
+		SELECT bu.id, bu.booking_id, bu.old_pack_type, bu.new_pack_type,
+		       bu.old_price_cents, bu.new_price_cents, bu.difference_cents, bu.status,
+		       COALESCE(bu.stripe_session_id, ''), bu.token, bu.created_at, bu.updated_at,
+		       b.name, b.email,
+		       (SELECT name FROM packs WHERE id = bu.old_pack_type) AS old_pack_label,
+		       (SELECT name FROM packs WHERE id = bu.new_pack_type) AS new_pack_label
+		FROM booking_updates bu
+		JOIN bookings b ON b.id = bu.booking_id
+		WHERE bu.token = ?`, token).Scan(
+		&update.ID, &update.BookingID, &update.OldPackType, &update.NewPackType,
+		&update.OldPriceCents, &update.NewPriceCents, &update.DifferenceCents, &update.Status,
+		&update.StripeSessionID, &update.Token, &update.CreatedAt, &update.UpdatedAt,
+		&bookingName, &bookingEmail, &oldPackName, &newPackName)
+	if err == sql.ErrNoRows {
+		h.respondError(w, http.StatusNotFound, "Booking update not found")
+		return
+	}
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to get booking update")
+		return
+	}
+
+	response := map[string]interface{}{
+		"id":              update.ID,
+		"bookingId":       update.BookingID,
+		"bookingName":     bookingName,
+		"oldPackType":     update.OldPackType,
+		"newPackType":     update.NewPackType,
+		"oldPriceCents":   update.OldPriceCents,
+		"newPriceCents":   update.NewPriceCents,
+		"differenceCents": update.DifferenceCents,
+		"status":          update.Status,
+		"token":           update.Token,
+	}
+
+	if oldPackName.Valid {
+		response["oldPackName"] = oldPackName.String
+	}
+	if newPackName.Valid {
+		response["newPackName"] = newPackName.String
+	}
+
+	// If already paid, just return status
+	if update.Status == "paid" {
+		h.respondJSON(w, http.StatusOK, response)
+		return
+	}
+
+	// If awaiting_payment, create Stripe checkout if not already created
+	if update.Status == "awaiting_payment" {
+		if update.StripeSessionID.Valid && update.StripeSessionID.String != "" {
+			// Check if existing session is still valid
+			sess, stripeErr := session.Get(update.StripeSessionID.String, nil)
+			if stripeErr == nil && sess.URL != "" && sess.PaymentStatus != "paid" {
+				response["checkoutUrl"] = sess.URL
+				h.respondJSON(w, http.StatusOK, response)
+				return
+			}
+			// Session expired or paid, create a new one
+		}
+
+		// Create new Stripe checkout session for the difference
+		differenceEuros := float64(update.DifferenceCents) / 100
+
+		params := &stripe.CheckoutSessionParams{
+			PaymentMethodTypes: stripe.StringSlice([]string{"card"}),
+			Mode:               stripe.String(string(stripe.CheckoutSessionModePayment)),
+			CustomerEmail:      stripe.String(bookingEmail),
+			LineItems: []*stripe.CheckoutSessionLineItemParams{
+				{
+					PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+						Currency:   stripe.String("eur"),
+						ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+							Name: stripe.String(fmt.Sprintf("Suplemento cambio de pack (%.2f€)", differenceEuros)),
+						},
+						UnitAmount: stripe.Int64(int64(update.DifferenceCents)),
+					},
+					Quantity: stripe.Int64(1),
+				},
+			},
+			SuccessURL: stripe.String(fmt.Sprintf("%s/payment_success?update_token=%s", h.cfg.FrontendURL, token)),
+			CancelURL:  stripe.String(fmt.Sprintf("%s/booking-update/%s", h.cfg.FrontendURL, token)),
+			Metadata: map[string]string{
+				"booking_update_token": token,
+				"booking_update_id":    fmt.Sprintf("%d", update.ID),
+				"booking_id":           update.BookingID,
+				"type":                 "booking_update",
+			},
+		}
+
+		sess, stripeErr := session.New(params)
+		if stripeErr != nil {
+			log.Printf("Stripe session error for booking update: %v", stripeErr)
+			h.respondError(w, http.StatusInternalServerError, "Failed to create checkout session")
+			return
+		}
+
+		// Store session ID
+		h.db.Exec(`UPDATE booking_updates SET stripe_session_id = ? WHERE id = ?`, sess.ID, update.ID)
+
+		response["checkoutUrl"] = sess.URL
+		h.respondJSON(w, http.StatusOK, response)
+		return
+	}
+
+	h.respondJSON(w, http.StatusOK, response)
+}
+
+// handleBookingUpdatePayment processes a completed Stripe checkout for a booking update.
+func (h *Handler) handleBookingUpdatePayment(sess *stripe.CheckoutSession) {
+	meta := sess.Metadata
+	if meta["type"] != "booking_update" {
+		return
+	}
+
+	token := meta["booking_update_token"]
+	if token == "" {
+		return
+	}
+
+	// Mark booking_update as paid
+	_, err := h.db.Exec(`UPDATE booking_updates SET status = 'paid' WHERE token = ? AND status = 'awaiting_payment'`, token)
+	if err != nil {
+		log.Printf("Failed to update booking_update status: %v", err)
+		return
+	}
+
+	// Get update details and apply to booking
+	var update models.BookingUpdate
+	err = h.db.QueryRow(`SELECT booking_id, new_pack_type, new_price_cents FROM booking_updates WHERE token = ?`, token).Scan(
+		&update.BookingID, &update.NewPackType, &update.NewPriceCents)
+	if err != nil {
+		log.Printf("Failed to get booking_update for apply: %v", err)
+		return
+	}
+
+	// Update booking pack_type
+	h.db.Exec(`UPDATE bookings SET pack_type = ? WHERE id = ?`, update.NewPackType, update.BookingID)
+
+	// Get new pack info for booking_items update
+	newPack := h.getPackInfo(update.NewPackType)
+	if newPack != nil {
+		// Replace pack items
+		h.db.Exec(`DELETE FROM booking_items WHERE booking_id = ? AND item_type = 'pack'`, update.BookingID)
+		h.db.Exec(`INSERT INTO booking_items (booking_id, item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents)
+			VALUES (?, 'pack', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			update.BookingID, newPack.ID, newPack.Name, newPack.Adults, newPack.Children,
+			newPack.HasPhotographer, newPack.HasPremiumPass, update.NewPriceCents, update.NewPriceCents)
+	}
+
+	log.Printf("Booking update %s applied: booking %s pack changed to %s", token, update.BookingID, update.NewPackType)
 }

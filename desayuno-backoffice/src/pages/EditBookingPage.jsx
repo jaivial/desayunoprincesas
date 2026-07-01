@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchBookings, updateBooking } from '../store/bookingsSlice';
-import { ArrowLeft, Loader2, Save, Plus, Trash2, AlertTriangle, Check, Package, Camera, Crown } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Plus, Trash2, AlertTriangle, Check, Package, Camera, Crown, RefreshCw, AlertCircle } from 'lucide-react';
 import Select from '../components/ui/Select';
 import { getAuthHeaders } from '../store/authSlice';
 
@@ -133,6 +133,15 @@ export default function EditBookingPage() {
   const [allergies, setAllergies] = useState([]);
   const [allergiesLoading, setAllergiesLoading] = useState(true);
 
+  // Pack change state
+  const [availablePacks, setAvailablePacks] = useState([]);
+  const [packsLoading, setPacksLoading] = useState(false);
+  const [selectedNewPack, setSelectedNewPack] = useState('');
+  const [packChangeModal, setPackChangeModal] = useState(false);
+  const [packChangeLoading, setPackChangeLoading] = useState(false);
+  const [packChangeResult, setPackChangeResult] = useState(null);
+  const [manualPaymentMethod, setManualPaymentMethod] = useState('');
+
   useEffect(() => {
     if (bookings.length === 0) {
       dispatch(fetchBookings({}));
@@ -157,6 +166,27 @@ export default function EditBookingPage() {
       });
     }
   }, [bookings, id, form]);
+
+  // Fetch available packs for this booking's event date
+  useEffect(() => {
+    if (!id || !form) return;
+    const fetchPacks = async () => {
+      setPacksLoading(true);
+      try {
+        const res = await fetch(`${API_URL}/api/admin/bookings/${id}/packs`, {
+          headers: { ...getAuthHeaders() },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setAvailablePacks(data.packs || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch packs:', err);
+      }
+      setPacksLoading(false);
+    };
+    fetchPacks();
+  }, [id, form]);
 
   // Fetch allergies
   useEffect(() => {
@@ -204,6 +234,54 @@ export default function EditBookingPage() {
 
   const deleteAllergyMember = (index) => {
     setAllergies(allergies.filter((_, i) => i !== index));
+  };
+
+  const handlePackChange = () => {
+    if (!selectedNewPack) return;
+    // Find new pack info
+    const newPack = availablePacks.find(p => p.id === selectedNewPack);
+    if (!newPack) return;
+    // Find current pack from items
+    const items = Array.isArray(bookingData?.items) ? bookingData.items : [];
+    const currentPackItem = items.find(it => it.itemType === 'pack');
+    const currentPrice = currentPackItem?.unitPriceCents || form.totalAmountCents || 0;
+    const newPrice = newPack.priceCents;
+
+    if (newPrice > currentPrice) {
+      // Show confirmation modal for price increase
+      setManualPaymentMethod('');
+      setPackChangeModal(true);
+    } else {
+      // Direct change (same or lower price)
+      confirmPackChange();
+    }
+  };
+
+  const confirmPackChange = async () => {
+    setPackChangeLoading(true);
+    setPackChangeModal(false);
+    try {
+      const newPack = availablePacks.find(p => p.id === selectedNewPack);
+      const body = { newPackType: selectedNewPack, newPackName: newPack?.name || '' };
+      if (manualPaymentMethod) {
+        body.paymentMethod = manualPaymentMethod;
+      }
+      const res = await fetch(`${API_URL}/api/admin/bookings/${id}/request-pack-update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      setPackChangeResult(data);
+      if (data.status === 'updated') {
+        // Refresh booking data
+        dispatch(fetchBookings({}));
+      }
+    } catch (err) {
+      console.error('Pack change error:', err);
+      setPackChangeResult({ status: 'error', message: 'Error al solicitar el cambio de pack' });
+    }
+    setPackChangeLoading(false);
   };
 
   const handleSubmit = async (e) => {
@@ -318,6 +396,76 @@ export default function EditBookingPage() {
                 </div>
               );
             })()}
+
+            {/* Pack Change Section */}
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg space-y-3">
+              <h2 className="text-base font-semibold text-amber-800 flex items-center gap-2">
+                <RefreshCw className="w-4 h-4" />
+                Cambiar pack
+              </h2>
+              <p className="text-xs text-amber-600">
+                Cambia el pack de la reserva. Si el nuevo pack tiene un precio superior, se enviará un email al cliente para abonar la diferencia.
+              </p>
+
+              {packChangeResult && (
+                <div className={`p-3 rounded-lg text-sm ${
+                  packChangeResult.status === 'updated'
+                    ? 'bg-green-100 text-green-800'
+                    : packChangeResult.status === 'awaiting_payment'
+                    ? 'bg-blue-100 text-blue-800'
+                    : 'bg-red-100 text-red-800'
+                }`}>
+                  {packChangeResult.message}
+                  {packChangeResult.differenceCents > 0 && (
+                    <span className="block mt-1 font-semibold">
+                      Suplemento: {((packChangeResult.differenceCents) / 100).toFixed(2)}€
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-end gap-3">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nuevo pack</label>
+                  {packsLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Cargando packs...
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedNewPack}
+                      onChange={(e) => {
+                        setSelectedNewPack(e.target.value);
+                        setPackChangeResult(null);
+                      }}
+                      className="input text-sm"
+                    >
+                      <option value="">— Seleccionar pack —</option>
+                      {availablePacks.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} — {(p.priceCents / 100).toFixed(2)}€
+                          ({p.adults}A / {p.children}N)
+                          {!p.active ? ' (No disponible)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePackChange}
+                  disabled={!selectedNewPack || packChangeLoading}
+                  className="btn btn-secondary text-sm flex items-center gap-1"
+                >
+                  {packChangeLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4" />
+                  )}
+                  Cambiar
+                </button>
+              </div>
+            </div>
 
             {/* Personal info */}
             <div>
@@ -513,6 +661,93 @@ export default function EditBookingPage() {
           </div>
         </div>
       </form>
+
+      {/* Pack Change Confirmation Modal */}
+      {packChangeModal && (() => {
+        const items = Array.isArray(bookingData?.items) ? bookingData.items : [];
+        const currentPackItem = items.find(it => it.itemType === 'pack');
+        const currentPrice = currentPackItem?.unitPriceCents || form.totalAmountCents || 0;
+        const newPack = availablePacks.find(p => p.id === selectedNewPack);
+        const newPrice = newPack?.priceCents || 0;
+        const diff = newPrice - currentPrice;
+        const paymentMethods = [
+          { value: '', label: 'Online (Stripe)', desc: 'Enlace de pago por email' },
+          { value: 'bizum', label: 'Bizum', desc: 'Pagado por Bizum' },
+          { value: 'transferencia', label: 'Transferencia bancaria', desc: 'Pagado por transferencia' },
+          { value: 'efectivo', label: 'Efectivo', desc: 'Pagado en efectivo' },
+        ];
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-2xl">
+              <div className="flex items-start gap-3 mb-4">
+                <AlertCircle className="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">Suplemento de pago requerido</h3>
+                  <p className="text-sm text-gray-600 mt-2">
+                    Este cambio requiere de un suplemento de <strong className="text-amber-600">{((diff) / 100).toFixed(2)}€</strong>.
+                  </p>
+                  <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm">
+                    <div className="flex justify-between mb-1">
+                      <span className="text-gray-600">Pack actual:</span>
+                      <span className="font-medium">{currentPackItem?.packName || bookingData?.packType || '—'}</span>
+                    </div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-gray-600">Nuevo pack:</span>
+                      <span className="font-medium">{newPack?.name || selectedNewPack}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-amber-700">
+                      <span>Diferencia:</span>
+                      <span>{((diff) / 100).toFixed(2)}€</span>
+                    </div>
+                  </div>
+
+                  <p className="text-sm font-medium text-gray-700 mt-4 mb-2">Método de pago</p>
+                  <div className="space-y-2">
+                    {paymentMethods.map(pm => (
+                      <label key={pm.value} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                        manualPaymentMethod === pm.value
+                          ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-400'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="paymentMethod"
+                          value={pm.value}
+                          checked={manualPaymentMethod === pm.value}
+                          onChange={() => setManualPaymentMethod(pm.value)}
+                          className="w-4 h-4 text-amber-500"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">{pm.label}</span>
+                          {pm.desc && <span className="text-xs text-gray-500 ml-2">({pm.desc})</span>}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setPackChangeModal(false)}
+                  className="btn btn-secondary"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPackChange}
+                  disabled={manualPaymentMethod === '' ? false : !manualPaymentMethod}
+                  className="btn btn-primary flex items-center gap-2"
+                >
+                  <Check className="w-4 h-4" />
+                  {manualPaymentMethod === '' ? 'Enviar email de pago' : 'Confirmar cambio'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

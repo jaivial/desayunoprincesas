@@ -222,6 +222,26 @@ func Migrate(db *sql.DB) error {
 			FOREIGN KEY (event_date_id) REFERENCES event_opening_dates(id) ON DELETE CASCADE
 		)`,
 
+		// Booking updates - tracks pack/category changes that require payment
+		`CREATE TABLE IF NOT EXISTS booking_updates (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			booking_id CHAR(36) NOT NULL,
+			old_pack_type VARCHAR(50) NOT NULL,
+			new_pack_type VARCHAR(50) NOT NULL,
+			old_price_cents INT NOT NULL DEFAULT 0,
+			new_price_cents INT NOT NULL DEFAULT 0,
+			difference_cents INT NOT NULL DEFAULT 0,
+			status VARCHAR(30) NOT NULL DEFAULT 'awaiting_payment',
+			payment_method VARCHAR(30) NULL,
+			stripe_session_id VARCHAR(255) NULL,
+			token VARCHAR(255) NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY idx_token (token),
+			KEY idx_booking_id (booking_id),
+			FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE
+		)`,
+
 		// Seed default settings if not exists
 		`INSERT IGNORE INTO settings (id, max_capacity, adult_price_cents, child_price_cents)
 		 VALUES (1, 120, 3500, 4000)`,
@@ -263,6 +283,8 @@ func Migrate(db *sql.DB) error {
 		`ALTER TABLE bookings ADD COLUMN event_date_id INT NULL AFTER id`,
 		`ALTER TABLE bookings ADD KEY idx_event_date_id (event_date_id)`,
 		`ALTER TABLE settings ADD COLUMN default_event_date_id INT NULL`,
+		// Booking updates payment method for manual payments
+		`ALTER TABLE booking_updates ADD COLUMN payment_method VARCHAR(30) NULL AFTER status`,
 	}
 	for _, m := range optionalMigrations {
 		db.Exec(m) // Ignore errors (column/index may already exist)

@@ -6,6 +6,7 @@ import { fetchCapacity } from './store/capacitySlice';
 import LandingPage from './pages/LandingPage';
 import PaymentSuccess from './pages/PaymentSuccess';
 import PaymentCancel from './pages/PaymentCancel';
+import BookingUpdatePage from './pages/BookingUpdatePage';
 import TermsPage from './pages/TermsPage';
 import PrivacyPage from './pages/PrivacyPage';
 
@@ -22,6 +23,7 @@ function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/payment_success" element={<PaymentSuccess />} />
       <Route path="/payment_cancel" element={<PaymentCancel />} />
+      <Route path="/booking-update/:token" element={<BookingUpdatePage />} />
       <Route path="/terminos" element={<TermsPage />} />
       <Route path="/privacidad" element={<PrivacyPage />} />
     </Routes>

@@ -30,6 +30,7 @@ export default function PaymentSuccess() {
   const [error, setError] = useState(null);
 
   const bookingId = searchParams.get('bookingId') || searchParams.get('session_id');
+  const updateToken = searchParams.get('update_token');
 
   useEffect(() => {
     confetti({
@@ -52,6 +53,13 @@ export default function PaymentSuccess() {
   }, []);
 
   useEffect(() => {
+    // Handle booking update payment success
+    if (updateToken) {
+      setLoading(false);
+      setBooking({ _type: 'booking_update', token: updateToken });
+      return;
+    }
+
     if (!bookingId) {
       setError('No se encontró la reserva');
       setLoading(false);
@@ -102,6 +110,11 @@ export default function PaymentSuccess() {
         <div className="animate-pulse text-white text-xl">Cargando reserva...</div>
       </div>
     );
+  }
+
+  // Booking update payment success
+  if (booking?._type === 'booking_update') {
+    return <BookingUpdateSuccess token={booking.token} />;
   }
 
   if (error) {
@@ -291,3 +304,62 @@ export default function PaymentSuccess() {
   );
 }
 // Build 1781351798
+
+function BookingUpdateSuccess({ token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/public/booking-update/${token}`)
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [token]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-magic-dark flex items-center justify-center">
+        <div className="animate-pulse text-white text-xl">Verificando pago...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-magic-dark py-12 px-4">
+      <div className="max-w-lg mx-auto">
+        <div className="glass rounded-3xl p-8 md:p-12 text-center">
+          <div className="w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-6">
+            <CheckCircle className="w-12 h-12 text-green-400" />
+          </div>
+          <h1 className="font-display text-3xl font-bold text-white mb-2">¡Pago Completado!</h1>
+          <p className="text-white/70 mb-8">El suplemento ha sido abonado correctamente.</p>
+
+          <div className="text-left space-y-4 mb-8">
+            <div className="p-4 bg-white/5 rounded-xl">
+              <p className="text-white/60 text-sm mb-2">Detalles del cambio</p>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Pack anterior:</span>
+                  <span className="text-white">{data?.oldPackName || data?.oldPackType}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Nuevo pack:</span>
+                  <span className="text-white">{data?.newPackName || data?.newPackType}</span>
+                </div>
+                <div className="flex justify-between font-bold text-green-400 pt-2 border-t border-white/10">
+                  <span>Pagado:</span>
+                  <span>{(data?.differenceCents / 100).toFixed(2)}€</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <Link to="/" className="btn-primary inline-flex items-center gap-2">
+            <Home className="w-5 h-5" />
+            Volver al inicio
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
