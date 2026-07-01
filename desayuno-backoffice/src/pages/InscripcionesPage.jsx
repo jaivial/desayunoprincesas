@@ -161,6 +161,7 @@ export default function InscripcionesPage() {
     awaiting_payment: { label: 'Cambio pendiente', cls: 'bg-amber-100 text-amber-700' },
     paid: { label: 'Cambio pagado', cls: 'bg-green-100 text-green-700' },
     manual: { label: 'Cambio manual', cls: 'bg-blue-100 text-blue-700' },
+    refund: { label: 'Reembolsado', cls: 'bg-emerald-100 text-emerald-700' },
   };
 
   const BookingUpdateBadge = ({ b }) => {

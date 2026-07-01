@@ -2053,11 +2053,48 @@ func (h *Handler) RequestPackUpdate(w http.ResponseWriter, r *http.Request) {
 
 	differenceCents := newPriceCents - oldPriceCents
 
-	// If price is same or lower, apply directly (no Stripe needed)
-	if differenceCents <= 0 {
-		// Direct update: change pack in booking
+	// Negative difference: pack is cheaper, client gets money back
+	if differenceCents < 0 {
+		if req.PaymentMethod == "" {
+			h.respondError(w, http.StatusBadRequest, "Se requiere método de reembolso (reembolso_bizum, reembolso_transferencia, reembolso_efectivo)")
+			return
+		}
+		validRefundMethods := map[string]bool{"reembolso_bizum": true, "reembolso_transferencia": true, "reembolso_efectivo": true}
+		if !validRefundMethods[req.PaymentMethod] {
+			h.respondError(w, http.StatusBadRequest, "Método de reembolso no válido")
+			return
+		}
+
+		token := uuid.New().String()
+		_, err = h.db.Exec(`INSERT INTO booking_updates (booking_id, old_pack_type, new_pack_type, old_price_cents, new_price_cents, difference_cents, status, payment_method, token)
+			VALUES (?, ?, ?, ?, ?, ?, 'refund', ?, ?)`,
+			bookingID, oldPackType, req.NewPackType, oldPriceCents, newPriceCents, differenceCents, req.PaymentMethod, token)
+		if err != nil {
+			h.respondError(w, http.StatusInternalServerError, "Failed to create booking update")
+			return
+		}
+
 		h.db.Exec(`UPDATE bookings SET pack_type = ? WHERE id = ?`, req.NewPackType, bookingID)
-		// Update booking_items
+		h.db.Exec(`DELETE FROM booking_items WHERE booking_id = ? AND item_type = 'pack'`, bookingID)
+		h.db.Exec(`INSERT INTO booking_items (booking_id, item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents)
+			VALUES (?, 'pack', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			bookingID, newPack.ID, newPack.Name, newPack.Adults, newPack.Children,
+			newPack.HasPhotographer, newPack.HasPremiumPass, newPriceCents, newPriceCents)
+
+		go h.email.SendPackUpdateConfirmation(bookingID, req.PaymentMethod, oldPackType, req.NewPackType, req.NewPackName, differenceCents)
+
+		h.respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":          "updated",
+			"paymentMethod":   req.PaymentMethod,
+			"differenceCents": differenceCents,
+			"message":         "Pack actualizado con reembolso registrado.",
+		})
+		return
+	}
+
+	// Same price: apply directly
+	if differenceCents == 0 {
+		h.db.Exec(`UPDATE bookings SET pack_type = ? WHERE id = ?`, req.NewPackType, bookingID)
 		h.db.Exec(`DELETE FROM booking_items WHERE booking_id = ? AND item_type = 'pack'`, bookingID)
 		h.db.Exec(`INSERT INTO booking_items (booking_id, item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents)
 			VALUES (?, 'pack', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,

@@ -273,8 +273,12 @@ export default function EditBookingPage() {
       // Show confirmation modal for price increase
       setManualPaymentMethod('');
       setPackChangeModal(true);
+    } else if (newPrice < currentPrice) {
+      // Show confirmation modal for refund (negative difference)
+      setManualPaymentMethod('');
+      setPackChangeModal(true);
     } else {
-      // Direct change (same or lower price)
+      // Same price: direct change
       confirmPackChange();
     }
   };
@@ -502,6 +506,7 @@ export default function EditBookingPage() {
                       awaiting_payment: { label: 'Pendiente de pago', cls: 'bg-amber-100 text-amber-700' },
                       paid: { label: 'Pagado', cls: 'bg-green-100 text-green-700' },
                       manual: { label: `Pagado manual (${u.paymentMethod || '—'})`, cls: 'bg-blue-100 text-blue-700' },
+                      refund: { label: `Reembolsado (${u.paymentMethod || '—'})`, cls: 'bg-emerald-100 text-emerald-700' },
                     }[u.status] || { label: u.status, cls: 'bg-gray-100 text-gray-600' };
                     const diffEuros = (u.differenceCents / 100).toFixed(2);
                     return (
@@ -732,21 +737,34 @@ export default function EditBookingPage() {
         const newPack = availablePacks.find(p => p.id === selectedNewPack);
         const newPrice = newPack?.priceCents || 0;
         const diff = newPrice - currentPrice;
-        const paymentMethods = [
-          { value: '', label: 'Online (Stripe)', desc: 'Enlace de pago por email' },
-          { value: 'bizum', label: 'Bizum', desc: 'Pagado por Bizum' },
-          { value: 'transferencia', label: 'Transferencia bancaria', desc: 'Pagado por transferencia' },
-          { value: 'efectivo', label: 'Efectivo', desc: 'Pagado en efectivo' },
-        ];
+        const isRefund = diff < 0;
+        const absDiff = Math.abs(diff);
+        const paymentMethods = isRefund
+          ? [
+              { value: 'reembolso_bizum', label: 'Reembolso por Bizum', desc: 'Devuelto por Bizum' },
+              { value: 'reembolso_transferencia', label: 'Reembolso por transferencia', desc: 'Devuelto por transferencia' },
+              { value: 'reembolso_efectivo', label: 'Reembolso en efectivo', desc: 'Devuelto en efectivo' },
+            ]
+          : [
+              { value: '', label: 'Online (Stripe)', desc: 'Enlace de pago por email' },
+              { value: 'bizum', label: 'Bizum', desc: 'Pagado por Bizum' },
+              { value: 'transferencia', label: 'Transferencia bancaria', desc: 'Pagado por transferencia' },
+              { value: 'efectivo', label: 'Efectivo', desc: 'Pagado en efectivo' },
+            ];
         return (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-2xl">
               <div className="flex items-start gap-3 mb-4">
                 <AlertCircle className="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" />
                 <div>
-                  <h3 className="text-lg font-bold text-gray-900">Suplemento de pago requerido</h3>
+                  <h3 className="text-lg font-bold text-gray-900">
+                    {isRefund ? 'Reembolso requerido' : 'Suplemento de pago requerido'}
+                  </h3>
                   <p className="text-sm text-gray-600 mt-2">
-                    Este cambio requiere de un suplemento de <strong className="text-amber-600">{((diff) / 100).toFixed(2)}€</strong>.
+                    {isRefund
+                      ? `Este cambio supone una diferencia de ${((absDiff) / 100).toFixed(2)}€ a devolver al cliente.`
+                      : `Este cambio requiere de un suplemento de <strong className="text-amber-600">${((absDiff) / 100).toFixed(2)}€</strong>.`
+                    }
                   </p>
                   <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm">
                     <div className="flex justify-between mb-1">
@@ -757,13 +775,15 @@ export default function EditBookingPage() {
                       <span className="text-gray-600">Nuevo pack:</span>
                       <span className="font-medium">{newPack?.name || selectedNewPack}</span>
                     </div>
-                    <div className="flex justify-between font-bold text-amber-700">
-                      <span>Diferencia:</span>
-                      <span>{((diff) / 100).toFixed(2)}€</span>
+                    <div className={`flex justify-between font-bold ${isRefund ? 'text-green-700' : 'text-amber-700'}`}>
+                      <span>{isRefund ? 'A devolver:' : 'Diferencia:'}</span>
+                      <span>{isRefund ? `${((absDiff) / 100).toFixed(2)}€` : `${((absDiff) / 100).toFixed(2)}€`}</span>
                     </div>
                   </div>
 
-                  <p className="text-sm font-medium text-gray-700 mt-4 mb-2">Método de pago</p>
+                  <p className="text-sm font-medium text-gray-700 mt-4 mb-2">
+                    {isRefund ? 'Método de reembolso' : 'Método de pago'}
+                  </p>
                   <div className="space-y-2">
                     {paymentMethods.map(pm => (
                       <label key={pm.value} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
@@ -786,6 +806,11 @@ export default function EditBookingPage() {
                       </label>
                     ))}
                   </div>
+                  {!isRefund && manualPaymentMethod === '' && (
+                    <p className="text-xs text-gray-400 mt-2 italic">
+                      Stripe enviará un email al cliente con enlace para pagar la diferencia.
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex justify-end gap-3 mt-6">
@@ -799,11 +824,15 @@ export default function EditBookingPage() {
                 <button
                   type="button"
                   onClick={confirmPackChange}
-                  disabled={manualPaymentMethod === '' ? false : !manualPaymentMethod}
+                  disabled={manualPaymentMethod === '' && !isRefund ? false : !manualPaymentMethod}
                   className="btn btn-primary flex items-center gap-2"
                 >
                   <Check className="w-4 h-4" />
-                  {manualPaymentMethod === '' ? 'Enviar email de pago' : 'Confirmar cambio'}
+                  {isRefund
+                    ? 'Confirmar reembolso'
+                    : manualPaymentMethod === ''
+                    ? 'Enviar email de pago'
+                    : 'Confirmar cambio'}
                 </button>
               </div>
             </div>
