@@ -13,3 +13,5 @@ backend/desayuno-server
 backend/server
 backend/*.bak
 backend/*.bak2
+backend/*.bak.*
+backend/*.backup.*

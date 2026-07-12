@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchBookings, updateBooking } from '../store/bookingsSlice';
-import { ArrowLeft, Loader2, Save, Plus, Trash2, AlertTriangle, Check, Package, Camera, Crown, RefreshCw, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Plus, Minus, Trash2, AlertTriangle, Check, Package, Camera, Crown, RefreshCw, AlertCircle } from 'lucide-react';
 import Select from '../components/ui/Select';
 import { getAuthHeaders } from '../store/authSlice';
 
@@ -35,6 +35,56 @@ const PACK_NAMES = {
   cuento_ensueno_1: 'Pack Cuento de Ensueño 1',
   cuento_ensueno_2: 'Pack Cuento de Ensueño 2',
 };
+
+const TICKET_STATUS_OPTIONS = [
+  { value: 'pending', label: 'No pagado' },
+  { value: 'paid', label: 'Pagado' },
+];
+
+const TICKET_METHOD_OPTIONS = [
+  { value: 'stripe', label: 'Stripe' },
+  { value: 'bizum', label: 'Bizum' },
+  { value: 'cash', label: 'Efectivo' },
+];
+
+const getPackTicketTotals = (booking) => (Array.isArray(booking?.items) ? booking.items : [])
+  .filter((item) => item.itemType === 'pack')
+  .reduce((totals, item) => {
+    const quantity = item.quantity || 1;
+    totals.adults += (item.adults || 0) * quantity;
+    totals.children += (item.children || 0) * quantity;
+    return totals;
+  }, { adults: 0, children: 0 });
+
+const getInitialTicketGroups = (booking) => {
+  const individualItems = (Array.isArray(booking?.items) ? booking.items : [])
+    .filter((item) => item.itemType === 'individual');
+  const groups = individualItems.map((item) => ({
+    adults: item.adults || 0,
+    children: item.children || 0,
+    amountCents: item.lineTotalCents || 0,
+    paymentStatus: item.paymentStatus || booking.paymentStatus || 'pending',
+    paymentMethod: item.paymentMethod || booking.paymentMethod || 'cash',
+  }));
+
+  const packTotals = getPackTicketTotals(booking);
+  const remainingAdults = Math.max(0, (booking.adultsCount || 0) - packTotals.adults - groups.reduce((sum, item) => sum + item.adults, 0));
+  const remainingChildren = Math.max(0, (booking.childrenCount || 0) - packTotals.children - groups.reduce((sum, item) => sum + item.children, 0));
+  if ((remainingAdults > 0 || remainingChildren > 0) && individualItems.length === 0 && !booking.packType) {
+    groups.push({
+      adults: remainingAdults,
+      children: remainingChildren,
+      amountCents: Math.max(0, (booking.totalAmountCents || 0) - (booking.items || []).filter((item) => item.itemType === 'pack').reduce((sum, item) => sum + (item.lineTotalCents || 0), 0)),
+      paymentStatus: booking.paymentStatus || 'pending',
+      paymentMethod: booking.paymentMethod || 'cash',
+    });
+  }
+  return groups;
+};
+
+const getPackAmountCents = (booking) => (Array.isArray(booking?.items) ? booking.items : [])
+  .filter((item) => item.itemType === 'pack')
+  .reduce((total, item) => total + (item.lineTotalCents || 0), 0);
 
 function AllergyMemberCard({ member, onUpdate, onDelete }) {
   const toggleAllergy = (allergyId) => {
@@ -130,7 +180,9 @@ export default function EditBookingPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(null);
   const [bookingData, setBookingData] = useState(null);
+  const [ticketGroups, setTicketGroups] = useState([]);
   const [allergies, setAllergies] = useState([]);
+  const [initialAllergies, setInitialAllergies] = useState([]);
   const [allergiesLoading, setAllergiesLoading] = useState(true);
 
   // Pack change state
@@ -142,7 +194,6 @@ export default function EditBookingPage() {
   const [packChangeResult, setPackChangeResult] = useState(null);
   const [manualPaymentMethod, setManualPaymentMethod] = useState('');
   const [bookingUpdates, setBookingUpdates] = useState([]);
-  const [updatesLoading, setUpdatesLoading] = useState(false);
 
   useEffect(() => {
     if (bookings.length === 0) {
@@ -151,19 +202,26 @@ export default function EditBookingPage() {
   }, [dispatch, bookings.length]);
 
   useEffect(() => {
+    // Hydrate editable form once booking data arrives.
     const booking = bookings.find((b) => b.id === id);
     if (booking && !form) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBookingData(booking);
+      setTicketGroups(getInitialTicketGroups(booking));
       setForm({
         name: booking.name || '',
         surname: booking.surname || '',
         email: booking.email || '',
-        phone: booking.phone || '',
+        phone: booking.phoneNumber || booking.phone || '',
+        phoneCountryCode: booking.phoneCountryCode || '',
+        phoneNumber: booking.phoneNumber || booking.phone || '',
         adultsCount: booking.adultsCount || 0,
         childrenCount: booking.childrenCount || 0,
         paymentStatus: booking.paymentStatus || 'pending',
         paymentMethod: booking.paymentMethod || 'cash',
         totalAmountCents: booking.totalAmountCents || 0,
+        adultPriceCents: booking.adultPriceCents || 0,
+        childPriceCents: booking.childPriceCents || 0,
         confirmedAssistance: booking.confirmedAssistance || false,
       });
     }
@@ -194,7 +252,6 @@ export default function EditBookingPage() {
   useEffect(() => {
     if (!id) return;
     const fetchUpdates = async () => {
-      setUpdatesLoading(true);
       try {
         const res = await fetch(`${API_URL}/api/admin/bookings/${id}/updates`, {
           headers: { ...getAuthHeaders() },
@@ -205,7 +262,6 @@ export default function EditBookingPage() {
       } catch (err) {
         console.error('Failed to fetch updates:', err);
       }
-      setUpdatesLoading(false);
     };
     fetchUpdates();
   }, [id]);
@@ -223,6 +279,13 @@ export default function EditBookingPage() {
             ...a,
             allergies: a.allergies || [],
           })));
+          setInitialAllergies(data.map(a => ({
+            memberType: a.memberType,
+            memberIndex: a.memberIndex,
+            name: a.name,
+            lastname: a.lastname,
+            allergies: a.allergies || [],
+          })));
         }
       } catch (err) {
         console.error('Failed to fetch allergies:', err);
@@ -236,6 +299,39 @@ export default function EditBookingPage() {
 
   const handleChange = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const addTicketGroup = () => {
+    setTicketGroups((groups) => [...groups, {
+      adults: 0,
+      children: 0,
+      amountCents: 0,
+      paymentStatus: 'pending',
+      paymentMethod: 'cash',
+    }]);
+  };
+
+  const updateTicketGroup = (index, field, value) => {
+    setTicketGroups((groups) => groups.map((group, i) => (
+      i === index ? { ...group, [field]: value } : group
+    )));
+  };
+
+  const changeTicketCount = (index, field, delta) => {
+    const group = ticketGroups[index];
+    const nextCount = Math.max(0, (group?.[field] || 0) + delta);
+    const adultPriceCents = form?.adultPriceCents || 0;
+    const childPriceCents = form?.childPriceCents || 0;
+    const expectedAmount = (group.adults * adultPriceCents) + (group.children * childPriceCents);
+    const nextGroup = { ...group, [field]: nextCount };
+    if (group.amountCents === 0 || group.amountCents === expectedAmount) {
+      nextGroup.amountCents = (nextGroup.adults * adultPriceCents) + (nextGroup.children * childPriceCents);
+    }
+    setTicketGroups((groups) => groups.map((item, i) => (i === index ? nextGroup : item)));
+  };
+
+  const removeTicketGroup = (index) => {
+    setTicketGroups((groups) => groups.filter((_, i) => i !== index));
   };
 
   const addAllergyMember = () => {
@@ -314,12 +410,60 @@ export default function EditBookingPage() {
     e.preventDefault();
     setSaving(true);
     try {
+      const packTotals = getPackTicketTotals(bookingData);
+      const individualAdults = ticketGroups.reduce((sum, group) => sum + group.adults, 0);
+      const individualChildren = ticketGroups.reduce((sum, group) => sum + group.children, 0);
+      const persistedItems = Array.isArray(bookingData?.items) ? bookingData.items : [];
+      const hasPersistedPackItems = persistedItems.some((item) => item.itemType === 'pack');
+      const originalTicketGroups = getInitialTicketGroups(bookingData);
+      const originalIndividualAdults = originalTicketGroups.reduce((sum, group) => sum + group.adults, 0);
+      const originalIndividualChildren = originalTicketGroups.reduce((sum, group) => sum + group.children, 0);
+      const originalIndividualAmount = originalTicketGroups.reduce((sum, group) => sum + group.amountCents, 0);
+      const itemAmountCents = ticketGroups.reduce((sum, group) => sum + group.amountCents, 0);
+      const totalAmountCents = hasPersistedPackItems
+        ? getPackAmountCents(bookingData) + itemAmountCents
+        : bookingData?.packType
+          ? (form.totalAmountCents - originalIndividualAmount) + itemAmountCents
+          : ticketGroups.length > 0 ? itemAmountCents : form.totalAmountCents;
+      const saveData = {
+        ...form,
+        phoneNumber: form.phoneNumber || form.phone,
+        items: ticketGroups.map((group) => ({
+          adults: group.adults,
+          children: group.children,
+          amountCents: group.amountCents,
+          paymentStatus: group.paymentStatus,
+          paymentMethod: group.paymentMethod,
+        })),
+        adultsCount: hasPersistedPackItems
+          ? packTotals.adults + individualAdults
+          : bookingData?.packType
+            ? (form.adultsCount || 0) - originalIndividualAdults + individualAdults
+            : individualAdults,
+        childrenCount: hasPersistedPackItems
+          ? packTotals.children + individualChildren
+          : bookingData?.packType
+            ? (form.childrenCount || 0) - originalIndividualChildren + individualChildren
+            : individualChildren,
+        totalAmountCents,
+      };
+      const changes = [];
+      if (form.name !== (bookingData.name || '') || form.surname !== (bookingData.surname || '')) changes.push('Datos personales actualizados');
+      if (form.email !== (bookingData.email || '')) changes.push('Email de contacto actualizado');
+      if (form.phoneNumber !== (bookingData.phoneNumber || bookingData.phone || '')) changes.push('Teléfono actualizado');
+      if (form.paymentStatus !== (bookingData.paymentStatus || 'pending')) changes.push('Estado general de pago actualizado');
+      if (form.paymentMethod !== (bookingData.paymentMethod || 'cash')) changes.push('Método general de pago actualizado');
+      if (form.confirmedAssistance !== Boolean(bookingData.confirmedAssistance)) changes.push('Estado de asistencia actualizado');
+      if (JSON.stringify(ticketGroups) !== JSON.stringify(getInitialTicketGroups(bookingData))) changes.push(`Entradas actualizadas: ${ticketGroups.length} grupo(s) de pago`);
+      const normalizedAllergies = allergies.map(({ memberType, memberIndex, name, lastname, allergies: memberAllergies }) => ({ memberType, memberIndex, name, lastname, allergies: memberAllergies }));
+      if (JSON.stringify(normalizedAllergies) !== JSON.stringify(initialAllergies)) changes.push('Información de alergias actualizada');
+      if (changes.length === 0) changes.push('Datos de la reserva revisados');
       // Update booking
-      await dispatch(updateBooking({ id, data: form })).unwrap();
+      await dispatch(updateBooking({ id, data: saveData })).unwrap();
       
       // Update allergies
       const validAllergies = allergies.filter(a => a.name && a.lastname && a.allergies.length > 0);
-      await fetch(`${API_URL}/api/admin/bookings/${id}/allergies`, {
+      const allergiesResponse = await fetch(`${API_URL}/api/admin/bookings/${id}/allergies`, {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
@@ -327,10 +471,24 @@ export default function EditBookingPage() {
         },
         body: JSON.stringify(validAllergies),
       });
+      if (!allergiesResponse.ok) {
+        throw new Error(`Los cambios se guardaron, pero no se pudieron guardar las alergias (${allergiesResponse.status})`);
+      }
+
+      const emailResponse = await fetch(`${API_URL}/api/admin/bookings/${id}/send-update-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ changes }),
+      });
+      if (!emailResponse.ok) {
+        throw new Error(`Los cambios se guardaron, pero no se pudo enviar el email al cliente (${emailResponse.status})`);
+      }
       
       navigate('/inscripciones');
     } catch (err) {
       console.error('Error updating booking:', err);
+      const message = err instanceof Error ? err.message : 'Error de conexión. Comprueba tu sesión e inténtalo de nuevo.';
+      window.alert(message);
     } finally {
       setSaving(false);
     }
@@ -343,7 +501,9 @@ export default function EditBookingPage() {
 
   const methodOptions = [
     { value: 'stripe', label: 'Online (Stripe)' },
+    { value: 'bizum', label: 'Bizum' },
     { value: 'cash', label: 'Efectivo' },
+    { value: 'mixed', label: 'Mixto' },
   ];
 
   const confirmedOptions = [
@@ -574,39 +734,121 @@ export default function EditBookingPage() {
                     type="tel"
                     className="input"
                     value={form.phone}
-                    onChange={(e) => handleChange('phone', e.target.value)}
+                    onChange={(e) => {
+                      handleChange('phone', e.target.value);
+                      handleChange('phoneNumber', e.target.value);
+                    }}
                     required
                   />
                 </div>
               </div>
             </div>
 
-            {/* Attendees */}
+            {/* Ticket groups */}
             <div>
-              <h2 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">Asistentes</h2>
-              <div className="grid grid-cols-2 gap-3 sm:gap-4">
+              <div className="flex items-center justify-between gap-3 mb-3 sm:mb-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Adultos</label>
-                  <input
-                    type="number"
-                    className="input"
-                    min="0"
-                    value={form.adultsCount}
-                    onChange={(e) => handleChange('adultsCount', parseInt(e.target.value) || 0)}
-                    required
-                  />
+                  <h2 className="text-base sm:text-lg font-semibold">Entradas por pago</h2>
+                  <p className="text-xs text-gray-500 mt-1">Cada sección puede tener método y estado de pago distintos.</p>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Niños</label>
-                  <input
-                    type="number"
-                    className="input"
-                    min="0"
-                    value={form.childrenCount}
-                    onChange={(e) => handleChange('childrenCount', parseInt(e.target.value) || 0)}
-                    required
-                  />
+                <button
+                  type="button"
+                  onClick={addTicketGroup}
+                  className="btn btn-secondary text-sm flex items-center gap-1 shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  Añadir entradas
+                </button>
+              </div>
+
+              {ticketGroups.length === 0 ? (
+                <p className="text-sm text-gray-500 border border-dashed rounded-lg p-4 text-center">
+                  No hay entradas individuales. Pulsa "Añadir entradas" para crear grupo de pago.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {ticketGroups.map((group, index) => (
+                    <div key={index} className="border border-blue-200 bg-blue-50 rounded-lg p-3 sm:p-4">
+                      <div className="flex items-center justify-between gap-2 mb-3">
+                        <p className="font-medium text-blue-800">Grupo de entradas {index + 1}</p>
+                        <button
+                          type="button"
+                          onClick={() => removeTicketGroup(index)}
+                          className="p-1.5 text-red-500 hover:bg-red-100 rounded-lg"
+                          title="Eliminar grupo"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {[
+                          { field: 'adults', label: 'Adultos' },
+                          { field: 'children', label: 'Niños' },
+                        ].map(({ field, label }) => (
+                          <div key={field} className="flex items-center justify-between bg-white rounded-lg border p-2">
+                            <span className="text-sm font-medium text-gray-700">{label}</span>
+                            <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={() => changeTicketCount(index, field, -1)}
+                                disabled={group[field] === 0}
+                                className="w-8 h-8 rounded-full bg-gray-100 text-gray-700 flex items-center justify-center hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                                aria-label={`Restar ${label.toLowerCase()}`}
+                              >
+                                <Minus className="w-4 h-4" />
+                              </button>
+                              <span className="w-8 text-center text-lg font-bold text-blue-700">{group[field]}</span>
+                              <button
+                                type="button"
+                                onClick={() => changeTicketCount(index, field, 1)}
+                                className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700"
+                                aria-label={`Añadir ${label.toLowerCase()}`}
+                              >
+                                <Plus className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Estado de pago</label>
+                          <Select
+                            value={group.paymentStatus}
+                            onChange={(value) => updateTicketGroup(index, 'paymentStatus', value)}
+                            options={TICKET_STATUS_OPTIONS}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Método de pago</label>
+                          <Select
+                            value={group.paymentMethod}
+                            onChange={(value) => updateTicketGroup(index, 'paymentMethod', value)}
+                            options={TICKET_METHOD_OPTIONS}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Importe (€)</label>
+                          <input
+                            type="number"
+                            className="input"
+                            min="0"
+                            step="0.01"
+                            value={(group.amountCents / 100).toFixed(2)}
+                            onChange={(e) => updateTicketGroup(index, 'amountCents', Math.round(parseFloat(e.target.value) * 100) || 0)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 mt-3 text-sm text-gray-600">
+                <div className="bg-gray-50 rounded-lg p-2">Total adultos: <strong>{getPackTicketTotals(bookingData).adults + ticketGroups.reduce((sum, group) => sum + group.adults, 0)}</strong></div>
+                <div className="bg-gray-50 rounded-lg p-2">Total niños: <strong>{getPackTicketTotals(bookingData).children + ticketGroups.reduce((sum, group) => sum + group.children, 0)}</strong></div>
               </div>
             </div>
 

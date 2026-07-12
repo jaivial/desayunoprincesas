@@ -33,6 +33,27 @@ const PACK_NAMES = {
   cuento_ensueno_2: 'Pack Cuento de Ensueño 2',
 };
 
+const getPaymentMethodLabel = (method) => ({
+  stripe: 'Online',
+  bizum: 'Bizum',
+  cash: 'Efectivo',
+  mixed: 'Mixto',
+}[method] || method || '—');
+
+const getPaymentStatusLabel = (status) => ({
+  paid: 'Pagado',
+  pending: 'Pendiente',
+  failed: 'Fallido',
+  refunded: 'Reembolsado',
+}[status] || status || '—');
+
+const getPaymentStatusClass = (status) => ({
+  paid: 'bg-green-100 text-green-700',
+  pending: 'bg-yellow-100 text-yellow-700',
+  failed: 'bg-red-100 text-red-700',
+  refunded: 'bg-gray-200 text-gray-700',
+}[status] || 'bg-gray-100 text-gray-700');
+
 export default function QRConfirmPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -154,6 +175,17 @@ export default function QRConfirmPage() {
                     <p className="text-xs text-purple-600">
                       Incluye: {(it.adults || 0) * (it.quantity || 1)} adulto(s), {(it.children || 0) * (it.quantity || 1)} niño(s)
                     </p>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      <span className={`px-2 py-0.5 rounded text-xs ${getPaymentStatusClass(it.paymentStatus || booking.paymentStatus)}`}>
+                        {getPaymentStatusLabel(it.paymentStatus || booking.paymentStatus)}
+                      </span>
+                      <span className="px-2 py-0.5 bg-white/80 rounded text-xs text-gray-700">
+                        {getPaymentMethodLabel(it.paymentMethod || booking.paymentMethod)}
+                      </span>
+                      <span className="px-2 py-0.5 bg-white/80 rounded text-xs text-gray-700">
+                        {((it.lineTotalCents || 0) / 100).toFixed(2)}€
+                      </span>
+                    </div>
                   </div>
                 ));
               })()}
@@ -170,6 +202,17 @@ export default function QRConfirmPage() {
                       {it.adults > 0 && it.children > 0 && ', '}
                       {it.children > 0 && `${it.children} niño(s)`}
                     </p>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      <span className={`px-2 py-0.5 rounded text-xs ${getPaymentStatusClass(it.paymentStatus || booking.paymentStatus)}`}>
+                        {getPaymentStatusLabel(it.paymentStatus || booking.paymentStatus)}
+                      </span>
+                      <span className="px-2 py-0.5 bg-white rounded text-xs text-gray-700">
+                        {getPaymentMethodLabel(it.paymentMethod || booking.paymentMethod)}
+                      </span>
+                      <span className="px-2 py-0.5 bg-white rounded text-xs text-gray-700">
+                        {((it.lineTotalCents || 0) / 100).toFixed(2)}€
+                      </span>
+                    </div>
                   </div>
                 ));
               })()}
@@ -201,7 +244,7 @@ export default function QRConfirmPage() {
                 {booking.paymentStatus === 'paid' ? 'Pagado' : 'No pagado'}
               </span>
               <span className="px-2 py-1 bg-gray-200 rounded text-xs text-gray-700 whitespace-nowrap">
-                {booking.paymentMethod === 'stripe' ? 'Online' : 'Efectivo'}
+                {getPaymentMethodLabel(booking.paymentMethod)}
               </span>
             </div>
           </div>

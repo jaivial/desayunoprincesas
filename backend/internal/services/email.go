@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/smtp"
 	"strings"
@@ -113,12 +114,16 @@ type emailBookingItem struct {
 	HasPhotographer bool
 	HasPremiumPass  bool
 	Quantity        int
+	LineTotalCents  int
+	PaymentStatus   string
+	PaymentMethod   string
 }
 
 // getBookingItems loads the items (packs + individual tickets) of a booking.
 func (s *EmailService) getBookingItems(bookingID string) []emailBookingItem {
-	rows, err := s.db.Query(`SELECT item_type, COALESCE(pack_type, ''), COALESCE(pack_name, ''), adults, children, has_photographer, has_premium_pass, quantity
-		FROM booking_items WHERE booking_id = ? ORDER BY id ASC`, bookingID)
+	rows, err := s.db.Query(`SELECT bi.item_type, COALESCE(bi.pack_type, ''), COALESCE(bi.pack_name, ''), bi.adults, bi.children, bi.has_photographer, bi.has_premium_pass, bi.quantity,
+		bi.line_total_cents, COALESCE(bi.payment_status, b.payment_status), COALESCE(bi.payment_method, b.payment_method)
+		FROM booking_items bi JOIN bookings b ON b.id = bi.booking_id WHERE bi.booking_id = ? ORDER BY bi.id ASC`, bookingID)
 	if err != nil {
 		return nil
 	}
@@ -127,11 +132,122 @@ func (s *EmailService) getBookingItems(bookingID string) []emailBookingItem {
 	var items []emailBookingItem
 	for rows.Next() {
 		var it emailBookingItem
-		if err := rows.Scan(&it.ItemType, &it.PackType, &it.PackName, &it.Adults, &it.Children, &it.HasPhotographer, &it.HasPremiumPass, &it.Quantity); err == nil {
+		if err := rows.Scan(&it.ItemType, &it.PackType, &it.PackName, &it.Adults, &it.Children, &it.HasPhotographer, &it.HasPremiumPass, &it.Quantity, &it.LineTotalCents, &it.PaymentStatus, &it.PaymentMethod); err == nil {
 			items = append(items, it)
 		}
 	}
 	return items
+}
+
+type bookingUpdateEmailData struct {
+	Name             string
+	Surname          string
+	QRCodeURL        string
+	EventDate        string
+	AdultsCount      int
+	ChildrenCount    int
+	TotalAmountCents int
+	PaymentStatus    string
+	PaymentMethod    string
+	Items            []emailBookingItem
+	Changes          []string
+}
+
+func paymentStatusLabel(status string) string {
+	if status == "paid" {
+		return "Pagado"
+	}
+	return "Pago pendiente"
+}
+
+func paymentMethodLabel(method string) string {
+	if label, ok := map[string]string{
+		"stripe": "Stripe",
+		"bizum":  "Bizum",
+		"cash":   "Efectivo",
+		"mixed":  "Método mixto",
+	}[method]; ok {
+		return label
+	}
+	return method
+}
+
+func buildBookingUpdateEmail(data bookingUpdateEmailData) (string, string) {
+	var groups strings.Builder
+	for index, item := range data.Items {
+		label := fmt.Sprintf("Grupo de entradas %d", index+1)
+		var tickets []string
+		if item.ItemType == "pack" {
+			label = item.PackName
+			if label == "" {
+				label = item.PackType
+			}
+			if item.Quantity > 1 {
+				label = fmt.Sprintf("%s x%d", label, item.Quantity)
+			}
+			if item.Adults > 0 || item.Children > 0 {
+				tickets = append(tickets, fmt.Sprintf("%d adulto(s), %d niño(s)", item.Adults*item.Quantity, item.Children*item.Quantity))
+			}
+		} else {
+			if item.Adults > 0 {
+				tickets = append(tickets, fmt.Sprintf("%d adulto(s)", item.Adults))
+			}
+			if item.Children > 0 {
+				tickets = append(tickets, fmt.Sprintf("%d niño(s)", item.Children))
+			}
+		}
+		groups.WriteString(fmt.Sprintf(`<tr><td style="padding:12px;border-bottom:1px solid #e5e7eb;"><strong>%s</strong><br/><span style="color:#4b5563;">%s</span></td><td style="padding:12px;border-bottom:1px solid #e5e7eb;">%s<br/><span style="color:#4b5563;">%s</span></td><td style="padding:12px;border-bottom:1px solid #e5e7eb;text-align:right;"><strong>%.2f€</strong></td></tr>`, label, strings.Join(tickets, ", "), paymentStatusLabel(item.PaymentStatus), paymentMethodLabel(item.PaymentMethod), float64(item.LineTotalCents)/100))
+	}
+	if groups.Len() == 0 {
+		groups.WriteString(`<tr><td colspan="3" style="padding:12px;">No hay entradas individuales registradas.</td></tr>`)
+	}
+
+	qrSection := `<p style="color:#6b7280;">El código QR se está preparando. Recibirás una nueva copia en breve.</p>`
+	if data.QRCodeURL != "" {
+		qrSection = fmt.Sprintf(`<div style="text-align:center;margin:28px 0;"><p style="font-weight:600;">Tu código QR de acceso</p><img src="%s" alt="Código QR" style="width:250px;height:250px;border:4px solid #d4a5c9;border-radius:8px;" /></div>`, data.QRCodeURL)
+	}
+
+	changesSection := ""
+	if len(data.Changes) > 0 {
+		var changes strings.Builder
+		for _, change := range data.Changes {
+			changes.WriteString(fmt.Sprintf(`<li>%s</li>`, html.EscapeString(change)))
+		}
+		changesSection = fmt.Sprintf(`<div style="background:#eff6ff;padding:20px;border-radius:10px;margin:20px 0;"><h2 style="margin-top:0;">Cambios realizados</h2><ul style="margin:0;padding-left:20px;">%s</ul></div>`, changes.String())
+	}
+
+	subject := "Actualización de tu reserva - Desayuno con Princesas"
+	body := fmt.Sprintf(`<!DOCTYPE html><html><body style="margin:0;padding:24px;background:#f5f5f5;font-family:Arial,sans-serif;color:#1f2937;"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;"><tr><td style="background:#1a1a1a;padding:28px;text-align:center;color:#fff;"><h1 style="margin:0;">Desayuno con Princesas</h1><p style="margin:10px 0 0;color:#f8bbd9;">Reserva actualizada</p></td></tr><tr><td style="padding:32px;"><p>Hola <strong>%s %s</strong>,</p><p>Hemos actualizado tu reserva. Estos son los datos finales vigentes.</p>%s<div style="background:#fce4ec;padding:20px;border-radius:10px;"><h2 style="margin-top:0;">Estado final de la reserva</h2><p><strong>Fecha:</strong> %s</p><p><strong>Estado:</strong> %s</p><p><strong>Método:</strong> %s</p><p><strong>Entradas:</strong> %d adulto(s), %d niño(s)</p><p style="font-size:20px;"><strong>Total final:</strong> %.2f€</p></div><h2>Entradas por método de pago</h2><table role="presentation" width="100%%" cellspacing="0" cellpadding="0"><tr style="background:#f3f4f6;"><th style="padding:10px;text-align:left;">Entradas</th><th style="padding:10px;text-align:left;">Pago</th><th style="padding:10px;text-align:right;">Importe</th></tr>%s</table>%s<p style="text-align:center;color:#6b7280;">Presenta este código QR en la entrada del evento.</p></td></tr></table></td></tr></table></body></html>`, data.Name, data.Surname, changesSection, data.EventDate, paymentStatusLabel(data.PaymentStatus), paymentMethodLabel(data.PaymentMethod), data.AdultsCount, data.ChildrenCount, float64(data.TotalAmountCents)/100, groups.String(), qrSection)
+	return subject, body
+}
+
+// SendBookingUpdate sends the current booking details after an admin save.
+func (s *EmailService) SendBookingUpdate(bookingID string, changes []string) error {
+	var data bookingUpdateEmailData
+	var eventDate sql.NullTime
+	var qrCodeURL sql.NullString
+	err := s.db.QueryRow(`SELECT b.name, b.surname, b.qr_code_url, b.adults_count, b.children_count, b.total_amount_cents, b.payment_status, b.payment_method, COALESCE(eod.event_date, s.event_date)
+		FROM bookings b JOIN settings s ON s.id = 1 LEFT JOIN event_opening_dates eod ON eod.id = b.event_date_id WHERE b.id = ?`, bookingID).Scan(
+		&data.Name, &data.Surname, &qrCodeURL, &data.AdultsCount, &data.ChildrenCount, &data.TotalAmountCents, &data.PaymentStatus, &data.PaymentMethod, &eventDate)
+	if err != nil {
+		return err
+	}
+	if qrCodeURL.Valid {
+		data.QRCodeURL = qrCodeURL.String
+	}
+	if eventDate.Valid {
+		data.EventDate = eventDate.Time.Format("02/01/2006")
+	} else {
+		data.EventDate = "Por confirmar"
+	}
+	data.Items = s.getBookingItems(bookingID)
+	data.Changes = changes
+	var email string
+	if err := s.db.QueryRow(`SELECT email FROM bookings WHERE id = ?`, bookingID).Scan(&email); err != nil {
+		return err
+	}
+	subject, body := buildBookingUpdateEmail(data)
+	return s.sendEmail(email, subject, body)
 }
 
 func (s *EmailService) SendConfirmation(bookingID string) {
@@ -327,7 +443,13 @@ func (s *EmailService) SendConfirmation(bookingID string) {
                                             %s
                                         </td>
                                     </tr>
-`, func() string { if ma.MemberType == "adult" { return "#7c3aed" } else { return "#f59e0b" } }(), memberTypeLabel, ma.Name, ma.Lastname, strings.Join(allergyNames, ", ")))
+`, func() string {
+				if ma.MemberType == "adult" {
+					return "#7c3aed"
+				} else {
+					return "#f59e0b"
+				}
+			}(), memberTypeLabel, ma.Name, ma.Lastname, strings.Join(allergyNames, ", ")))
 		}
 		allergiesSection = fmt.Sprintf(`
                             <!-- Allergies Section -->
@@ -664,7 +786,7 @@ func (s *EmailService) SendPackUpdateRequest(bookingID, token, oldPackType, newP
 		log.Printf("Failed to send pack update email: %v", err)
 		return
 	}
-		log.Printf("Pack update email sent to %s for booking %s", email, bookingID)
+	log.Printf("Pack update email sent to %s for booking %s", email, bookingID)
 }
 
 // SendPackUpdateConfirmation sends a full booking confirmation email with QR after a manual pack change.
@@ -705,9 +827,9 @@ func (s *EmailService) SendPackUpdateConfirmation(bookingID, paymentMethod, oldP
 	}
 
 	paymentLabels := map[string]string{
-		"bizum":        "Bizum",
+		"bizum":         "Bizum",
 		"transferencia": "Transferencia bancaria",
-		"efectivo":     "Efectivo",
+		"efectivo":      "Efectivo",
 	}
 	methodLabel := paymentMethod
 	if l, ok := paymentLabels[paymentMethod]; ok {

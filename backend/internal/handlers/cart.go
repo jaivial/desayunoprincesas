@@ -288,15 +288,19 @@ func aggregatePackFlags(items []resolvedCartItem) (hasPhotographer, hasPremiumPa
 
 // insertBookingItems persists the cart items for a booking.
 func (h *Handler) insertBookingItems(bookingID string, items []resolvedCartItem) {
+	var paymentStatus, paymentMethod string
+	if err := h.db.QueryRow(`SELECT payment_status, payment_method FROM bookings WHERE id = ?`, bookingID).Scan(&paymentStatus, &paymentMethod); err != nil {
+		return
+	}
 	for _, it := range items {
 		_, err := h.db.Exec(`INSERT INTO booking_items
-			(booking_id, item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(booking_id, item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents, payment_status, payment_method)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			bookingID, it.ItemType,
 			sql.NullString{String: it.PackType, Valid: it.PackType != ""},
 			sql.NullString{String: it.PackName, Valid: it.PackName != ""},
 			it.Adults, it.Children, it.HasPhotographer, it.HasPremiumPass,
-			it.Quantity, it.UnitPriceCents, it.LineTotalCents)
+			it.Quantity, it.UnitPriceCents, it.LineTotalCents, paymentStatus, paymentMethod)
 		if err != nil {
 			return
 		}
@@ -305,8 +309,10 @@ func (h *Handler) insertBookingItems(bookingID string, items []resolvedCartItem)
 
 // getBookingItems loads the persisted items for a booking, ready for JSON output.
 func (h *Handler) getBookingItems(bookingID string) []map[string]interface{} {
-	rows, err := h.db.Query(`SELECT item_type, pack_type, pack_name, adults, children, has_photographer, has_premium_pass, quantity, unit_price_cents, line_total_cents
-		FROM booking_items WHERE booking_id = ? ORDER BY id ASC`, bookingID)
+	rows, err := h.db.Query(`SELECT bi.id, bi.item_type, bi.pack_type, bi.pack_name, bi.adults, bi.children, bi.has_photographer, bi.has_premium_pass, bi.quantity, bi.unit_price_cents, bi.line_total_cents,
+		COALESCE(bi.payment_status, b.payment_status), COALESCE(bi.payment_method, b.payment_method)
+		FROM booking_items bi JOIN bookings b ON b.id = bi.booking_id
+		WHERE bi.booking_id = ? ORDER BY bi.id ASC`, bookingID)
 	if err != nil {
 		return nil
 	}
@@ -315,11 +321,13 @@ func (h *Handler) getBookingItems(bookingID string) []map[string]interface{} {
 	items := []map[string]interface{}{}
 	for rows.Next() {
 		var it models.BookingItem
-		if err := rows.Scan(&it.ItemType, &it.PackType, &it.PackName, &it.Adults, &it.Children,
-			&it.HasPhotographer, &it.HasPremiumPass, &it.Quantity, &it.UnitPriceCents, &it.LineTotalCents); err != nil {
+		if err := rows.Scan(&it.ID, &it.ItemType, &it.PackType, &it.PackName, &it.Adults, &it.Children,
+			&it.HasPhotographer, &it.HasPremiumPass, &it.Quantity, &it.UnitPriceCents, &it.LineTotalCents,
+			&it.PaymentStatus, &it.PaymentMethod); err != nil {
 			continue
 		}
 		m := map[string]interface{}{
+			"id":              it.ID,
 			"itemType":        it.ItemType,
 			"adults":          it.Adults,
 			"children":        it.Children,
@@ -328,6 +336,8 @@ func (h *Handler) getBookingItems(bookingID string) []map[string]interface{} {
 			"quantity":        it.Quantity,
 			"unitPriceCents":  it.UnitPriceCents,
 			"lineTotalCents":  it.LineTotalCents,
+			"paymentStatus":   it.PaymentStatus.String,
+			"paymentMethod":   it.PaymentMethod.String,
 		}
 		if it.PackType.Valid {
 			m["packType"] = it.PackType.String

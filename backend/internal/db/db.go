@@ -85,8 +85,6 @@ func Migrate(db *sql.DB) error {
 			KEY idx_email (email)
 		)`,
 
-
-
 		// Admin users table - stores backoffice users
 		`CREATE TABLE IF NOT EXISTS admin_users (
 			id INT PRIMARY KEY AUTO_INCREMENT,
@@ -285,6 +283,11 @@ func Migrate(db *sql.DB) error {
 		`ALTER TABLE settings ADD COLUMN default_event_date_id INT NULL`,
 		// Booking updates payment method for manual payments
 		`ALTER TABLE booking_updates ADD COLUMN payment_method VARCHAR(30) NULL AFTER status`,
+		// Individual ticket groups can have payment details different from booking-level payment.
+		`ALTER TABLE booking_items ADD COLUMN payment_status VARCHAR(30) NULL AFTER line_total_cents`,
+		`ALTER TABLE booking_items ADD COLUMN payment_method VARCHAR(30) NULL AFTER payment_status`,
+		// Snapshot legacy item payment data before booking-level method changes to mixed.
+		`UPDATE booking_items bi JOIN bookings b ON b.id = bi.booking_id SET bi.payment_status = COALESCE(bi.payment_status, b.payment_status), bi.payment_method = COALESCE(bi.payment_method, b.payment_method) WHERE bi.payment_status IS NULL OR bi.payment_method IS NULL`,
 	}
 	for _, m := range optionalMigrations {
 		db.Exec(m) // Ignore errors (column/index may already exist)

@@ -13,15 +13,12 @@ export default function QRReaderPage() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState(null);
   const [manualToken, setManualToken] = useState('');
-  const [isHttps, setIsHttps] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const isHttps = window.location.protocol === 'https:' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
 
   useEffect(() => {
-    const secure = window.location.protocol === 'https:' || 
-                   window.location.hostname === 'localhost' ||
-                   window.location.hostname === '127.0.0.1';
-    setIsHttps(secure);
-
     return () => {
       if (controlsRef.current) {
         controlsRef.current.stop();
@@ -62,7 +59,7 @@ export default function QRReaderPage() {
       controlsRef.current = await reader.decodeFromVideoDevice(
         undefined,
         videoRef.current,
-        async (result, err) => {
+        async (result) => {
           if (result) {
             const qrToken = result.getText();
             if (controlsRef.current) {

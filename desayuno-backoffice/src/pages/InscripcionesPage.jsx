@@ -5,7 +5,8 @@ import { fetchBookings, deleteBooking, resendEmail, setFilters } from '../store/
 import { ChevronDown, ChevronUp, Trash2, Mail, Loader2, Check, X, Search, Filter, Pencil, ExternalLink, AlertTriangle } from 'lucide-react';
 import Select from '../components/ui/Select';
 import { getAuthHeaders } from '../store/authSlice';
-import { ToastContainer, useToast } from '../components/ui/Toast';
+import { ToastContainer } from '../components/ui/Toast';
+import { useToast } from '../hooks/useToast';
 import { fetchEventDates } from '../store/eventDatesSlice';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -41,6 +42,12 @@ const PACK_NAMES = {
 };
 
 const getPackName = (packType) => PACK_NAMES[packType] || packType;
+const getPaymentMethodLabel = (method) => ({
+  stripe: 'Online',
+  bizum: 'Bizum',
+  cash: 'Efectivo',
+  mixed: 'Mixto',
+}[method] || method || '—');
 
 // Returns the list of pack labels for a booking (supports several packs).
 const getBookingPackLabels = (b) => {
@@ -96,7 +103,7 @@ export default function InscripcionesPage() {
     try {
       await dispatch(resendEmail(id)).unwrap();
       success('Email enviado correctamente');
-    } catch (err) {
+    } catch {
       error('Error al enviar el email');
     } finally {
       setSendingEmail(null);
@@ -133,7 +140,9 @@ export default function InscripcionesPage() {
   const methodOptions = [
     { value: '', label: 'Todos los métodos' },
     { value: 'stripe', label: 'Online (Stripe)' },
+    { value: 'bizum', label: 'Bizum' },
     { value: 'cash', label: 'Efectivo' },
+    { value: 'mixed', label: 'Mixto' },
   ];
 
   const confirmedOptions = [
@@ -239,7 +248,7 @@ export default function InscripcionesPage() {
             {b.paymentStatus === 'paid' ? <><Check className="w-3 h-3" /> Pagado</> : 'No pagado'}
           </span>
           <span className="px-2 py-1 bg-gray-100 rounded-full text-xs text-gray-600">
-            {b.paymentMethod === 'stripe' ? 'Online' : 'Efectivo'}
+            {getPaymentMethodLabel(b.paymentMethod)}
           </span>
           {getBookingPackLabels(b).length > 0 ? (
             getBookingPackLabels(b).map((label, i) => (
@@ -389,7 +398,7 @@ export default function InscripcionesPage() {
                         {b.paymentStatus === 'paid' ? <><Check className="w-3 h-3" /> Pagado</> : 'No pagado'}
                       </span>
                     </td>
-                    <td className="py-3 px-2 text-gray-600">{b.paymentMethod === 'stripe' ? 'Online' : 'Efectivo'}</td>
+                    <td className="py-3 px-2 text-gray-600">{getPaymentMethodLabel(b.paymentMethod)}</td>
                     <td className="py-3 px-2 text-right font-medium">{(b.totalAmountCents / 100).toFixed(2)}€</td>
                     <td className="py-3 px-2 text-gray-600 text-xs">{formatDate(b.createdAt)}</td>
                     <td className="py-3 px-2 text-gray-600 text-xs">{formatEventDate(b.eventDate)}</td>

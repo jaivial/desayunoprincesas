@@ -26,7 +26,7 @@ export const login = createAsyncThunk('auth/login', async ({ username, password 
     localStorage.setItem('token', data.token);
     localStorage.setItem('user', JSON.stringify(data.user));
     return data;
-  } catch (err) {
+  } catch {
     return rejectWithValue('Network error');
   }
 });
@@ -50,7 +50,7 @@ export const checkAuth = createAsyncThunk('auth/check', async (_, { rejectWithVa
     }
     
     return await res.json();
-  } catch (err) {
+  } catch {
     return rejectWithValue('Network error');
   }
 });

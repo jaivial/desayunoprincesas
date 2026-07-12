@@ -106,6 +106,8 @@ export default function EditPackPage() {
 
   useEffect(() => {
     if (isNew) {
+      // Form state must reset when route changes to the new-pack editor.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({ ...EMPTY_PACK });
       return;
     }

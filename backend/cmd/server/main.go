@@ -39,8 +39,8 @@ func main() {
 	h := handlers.New(database, hub, cfg, authService)
 
 	// Create rate limiters
-	apiLimiter := middleware.NewRateLimiter(100, time.Minute)      // 100 req/min for API
-	checkoutLimiter := middleware.NewRateLimiter(10, time.Minute)  // 10 req/min for checkout
+	apiLimiter := middleware.NewRateLimiter(100, time.Minute)     // 100 req/min for API
+	checkoutLimiter := middleware.NewRateLimiter(10, time.Minute) // 10 req/min for checkout
 
 	// Set up routes
 	mux := http.NewServeMux()
@@ -130,6 +130,12 @@ func adminBookingRouter(h *handlers.Handler) http.HandlerFunc {
 		if strings.HasSuffix(r.URL.Path, "/resend-email") {
 			if r.Method == "POST" {
 				h.ResendEmail(w, r)
+				return
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/send-update-email") {
+			if r.Method == "POST" {
+				h.SendBookingUpdateEmail(w, r)
 				return
 			}
 		}
@@ -263,7 +269,7 @@ func corsMiddleware(next http.Handler, cfg *config.Config) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 

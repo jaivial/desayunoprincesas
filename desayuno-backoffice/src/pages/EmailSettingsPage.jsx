@@ -21,6 +21,8 @@ export default function EmailSettingsPage() {
 
   useEffect(() => {
     if (settings) {
+      // Synchronize editable fields after async settings load.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         emailProvider: settings.emailProvider || 'smtp',
         smtpHost: settings.smtpHost || '',

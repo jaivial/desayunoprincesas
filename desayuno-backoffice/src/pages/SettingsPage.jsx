@@ -27,6 +27,8 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (selectedED) {
+      // Hydrate the date editor when selection changes.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         maxCapacity: selectedED.maxCapacity,
         adultPrice: (selectedED.adultPriceCents / 100).toFixed(2),

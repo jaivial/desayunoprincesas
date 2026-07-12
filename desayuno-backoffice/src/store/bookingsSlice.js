@@ -19,7 +19,16 @@ export const updateBooking = createAsyncThunk('bookings/update', async ({ id, da
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Failed to update booking');
+  if (!res.ok) {
+    let message = 'No se han podido guardar los cambios';
+    try {
+      const response = await res.json();
+      message = response.error || message;
+    } catch {
+      // Keep default message when API does not return JSON.
+    }
+    throw new Error(message);
+  }
   return { id, data };
 });
 

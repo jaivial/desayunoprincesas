@@ -98,8 +98,8 @@ export default function MonthCalendar({ eventDates = [], selected, onSelect }) {
           const ed = byDate[ymd];
           const isSelected = selected === ymd;
 
-          let colorClass = 'text-gray-400 cursor-default';
-          let title = '';
+          let colorClass;
+          let title;
 
           if (ed) {
             if (ed.isOpen && ed.full) {

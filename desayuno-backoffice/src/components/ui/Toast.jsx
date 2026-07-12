@@ -54,24 +54,3 @@ export function ToastContainer({ toasts, removeToast }) {
     </div>
   );
 }
-
-// Hook for managing toasts
-let toastId = 0;
-export function useToast() {
-  const [toasts, setToasts] = useState([]);
-
-  const addToast = (message, type = 'success', duration = 3000) => {
-    const id = ++toastId;
-    setToasts((prev) => [...prev, { id, message, type, duration }]);
-    return id;
-  };
-
-  const removeToast = (id) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
-
-  const success = (message, duration) => addToast(message, 'success', duration);
-  const error = (message, duration) => addToast(message, 'error', duration);
-
-  return { toasts, addToast, removeToast, success, error };
-}

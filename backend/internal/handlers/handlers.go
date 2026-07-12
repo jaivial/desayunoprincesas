@@ -28,12 +28,14 @@ import (
 
 // Handler contains dependencies for HTTP handlers.
 type Handler struct {
-	db    *sql.DB
-	hub   *ws.Hub
-	cfg   *config.Config
-	email *services.EmailService
-	qr    *services.QRService
-	auth  *auth.AuthService
+	db                     *sql.DB
+	hub                    *ws.Hub
+	cfg                    *config.Config
+	email                  *services.EmailService
+	qr                     *services.QRService
+	auth                   *auth.AuthService
+	ensureQRCode           func(string) error
+	sendBookingUpdateEmail func(string, []string) error
 }
 
 // New creates a new Handler with all dependencies.
@@ -47,6 +49,21 @@ func New(db *sql.DB, hub *ws.Hub, cfg *config.Config, authService *auth.AuthServ
 		qr:    services.NewQRService(db, cfg),
 		auth:  authService,
 	}
+}
+
+func (h *Handler) ensureBookingQRCode(bookingID string) error {
+	if h.ensureQRCode != nil {
+		return h.ensureQRCode(bookingID)
+	}
+	_, err := h.qr.GetQRCodeURL(bookingID)
+	return err
+}
+
+func (h *Handler) sendCurrentBookingUpdateEmail(bookingID string, changes []string) error {
+	if h.sendBookingUpdateEmail != nil {
+		return h.sendBookingUpdateEmail(bookingID, changes)
+	}
+	return h.email.SendBookingUpdate(bookingID, changes)
 }
 
 // Pack definitions with pricing
@@ -429,6 +446,9 @@ func (h *Handler) getCapacityForDate(eventDateID int) (*models.Capacity, error) 
 // broadcastCapacity pushes capacity for a specific event date over WS so clients
 // viewing that date update live. Pass 0 for a global (legacy) broadcast.
 func (h *Handler) broadcastCapacity(dateID int) {
+	if h.hub == nil {
+		return
+	}
 	capacity, err := h.getCapacityForDate(dateID)
 	if err != nil {
 		log.Printf("Error getting capacity for broadcast: %v", err)
@@ -545,8 +565,11 @@ func (h *Handler) GetBooking(w http.ResponseWriter, r *http.Request) {
 		"phoneNumber":         booking.PhoneNumber,
 		"adultsCount":         booking.AdultsCount,
 		"childrenCount":       booking.ChildrenCount,
+		"adultPriceCents":     booking.AdultPriceCents,
+		"childPriceCents":     booking.ChildPriceCents,
 		"totalAmountCents":    booking.TotalAmountCents,
 		"paymentStatus":       booking.PaymentStatus,
+		"paymentMethod":       booking.PaymentMethod,
 		"qrToken":             booking.QRToken,
 		"confirmedAssistance": booking.ConfirmedAssistance,
 	}
@@ -966,18 +989,64 @@ func (h *Handler) VerifyStripeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetKPIs returns dashboard KPIs.
+// GetKPIs returns dashboard KPIs with global aggregates (money + people)
+// plus a per-event-date breakdown for capacity and per-date metrics.
 func (h *Handler) GetKPIs(w http.ResponseWriter, r *http.Request) {
 	var kpis models.KPIs
 
-	h.db.QueryRow(`SELECT COALESCE(SUM(adults_count + children_count), 0) FROM bookings WHERE payment_status = 'paid' AND deleted_at IS NULL`).Scan(&kpis.TotalTicketsSold)
-	h.db.QueryRow(`SELECT COALESCE(SUM(total_amount_cents), 0) FROM bookings WHERE payment_status = 'paid' AND deleted_at IS NULL`).Scan(&kpis.TotalAmountEarned)
-	h.db.QueryRow(`SELECT COALESCE(SUM(total_amount_cents), 0) FROM bookings WHERE payment_status = 'paid' AND payment_method = 'stripe' AND deleted_at IS NULL`).Scan(&kpis.AmountPaidOnline)
-	h.db.QueryRow(`SELECT COALESCE(SUM(total_amount_cents), 0) FROM bookings WHERE payment_status = 'paid' AND payment_method = 'cash' AND deleted_at IS NULL`).Scan(&kpis.AmountPaidCash)
-	h.db.QueryRow(`SELECT COALESCE(SUM(adults_count), 0) FROM bookings WHERE payment_status = 'paid' AND deleted_at IS NULL`).Scan(&kpis.TotalAdultTickets)
-	h.db.QueryRow(`SELECT COALESCE(SUM(children_count), 0) FROM bookings WHERE payment_status = 'paid' AND deleted_at IS NULL`).Scan(&kpis.TotalChildTickets)
-	h.db.QueryRow(`SELECT max_capacity FROM settings WHERE id = 1`).Scan(&kpis.AvailableCapacity)
-	kpis.AvailableCapacity -= kpis.TotalTicketsSold
-	h.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE confirmed_assistance = true AND deleted_at IS NULL`).Scan(&kpis.ConfirmedAttendance)
+	// Per-date breakdown. Globals are accumulated from these rows so that
+	// totals reflect ONLY dates currently present in event_opening_dates —
+	// bookings tied to a manually-deleted date (dangling or NULL event_date_id)
+	// are intentionally excluded.
+	dateRows, err := h.db.Query(`SELECT id, DATE_FORMAT(event_date, '%Y-%m-%d'), is_open, max_capacity FROM event_opening_dates ORDER BY event_date ASC`)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to query event dates")
+		return
+	}
+	defer dateRows.Close()
+
+	for dateRows.Next() {
+		var dk models.DateKPIs
+		var maxCapacity int
+		var isOpen bool
+		if err := dateRows.Scan(&dk.EventDateID, &dk.EventDate, &isOpen, &maxCapacity); err != nil {
+			continue
+		}
+		dk.IsOpen = isOpen
+		dk.MaxCapacity = maxCapacity
+
+		// Per-date tickets
+		h.db.QueryRow(`SELECT COALESCE(SUM(adults_count + children_count), 0) FROM bookings WHERE event_date_id = ? AND payment_status = 'paid' AND deleted_at IS NULL`, dk.EventDateID).Scan(&dk.TicketsSold)
+		h.db.QueryRow(`SELECT COALESCE(SUM(adults_count), 0) FROM bookings WHERE event_date_id = ? AND payment_status = 'paid' AND deleted_at IS NULL`, dk.EventDateID).Scan(&dk.AdultTickets)
+		h.db.QueryRow(`SELECT COALESCE(SUM(children_count), 0) FROM bookings WHERE event_date_id = ? AND payment_status = 'paid' AND deleted_at IS NULL`, dk.EventDateID).Scan(&dk.ChildTickets)
+		dk.AvailableCapacity = maxCapacity - dk.TicketsSold
+		if dk.AvailableCapacity < 0 {
+			dk.AvailableCapacity = 0
+		}
+
+		// Per-date amounts
+		h.db.QueryRow(`SELECT COALESCE(SUM(total_amount_cents), 0) FROM bookings WHERE event_date_id = ? AND payment_status = 'paid' AND deleted_at IS NULL`, dk.EventDateID).Scan(&dk.AmountEarned)
+		h.db.QueryRow(`SELECT COALESCE(SUM(total_amount_cents), 0) FROM bookings WHERE event_date_id = ? AND payment_status = 'paid' AND payment_method = 'stripe' AND deleted_at IS NULL`, dk.EventDateID).Scan(&dk.PaidOnline)
+		h.db.QueryRow(`SELECT COALESCE(SUM(total_amount_cents), 0) FROM bookings WHERE event_date_id = ? AND payment_status = 'paid' AND payment_method = 'cash' AND deleted_at IS NULL`, dk.EventDateID).Scan(&dk.PaidCash)
+
+		// Per-date confirmed attendance
+		h.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE event_date_id = ? AND confirmed_assistance = true AND deleted_at IS NULL`, dk.EventDateID).Scan(&dk.ConfirmedAttendance)
+
+		// Accumulate into globals.
+		kpis.TotalTicketsSold += dk.TicketsSold
+		kpis.TotalAdultTickets += dk.AdultTickets
+		kpis.TotalChildTickets += dk.ChildTickets
+		kpis.TotalAmountEarned += dk.AmountEarned
+		kpis.AmountPaidOnline += dk.PaidOnline
+		kpis.AmountPaidCash += dk.PaidCash
+		kpis.ConfirmedAttendance += dk.ConfirmedAttendance
+
+		kpis.Dates = append(kpis.Dates, dk)
+	}
+
+	if kpis.Dates == nil {
+		kpis.Dates = []models.DateKPIs{}
+	}
 
 	h.respondJSON(w, http.StatusOK, kpis)
 }
@@ -985,7 +1054,7 @@ func (h *Handler) GetKPIs(w http.ResponseWriter, r *http.Request) {
 // ListBookings returns filtered bookings list.
 // Optional ?dateId= filters by b.event_date_id.
 func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
-	query := `SELECT b.id, b.name, b.surname, b.email, b.phone_country_code, b.phone_number, b.adults_count, b.children_count, b.pack_type, b.has_photographer, b.has_premium_pass, b.total_amount_cents, b.payment_status, b.payment_method, b.confirmed_assistance, b.created_at,
+	query := `SELECT b.id, b.name, b.surname, b.email, b.phone_country_code, b.phone_number, b.adults_count, b.children_count, b.adult_price_cents, b.child_price_cents, b.pack_type, b.has_photographer, b.has_premium_pass, b.total_amount_cents, b.payment_status, b.payment_method, b.confirmed_assistance, b.created_at,
 		(SELECT COUNT(*) FROM member_allergies ma WHERE ma.booking_id = b.id) as allergy_count,
 		DATE_FORMAT(eod.event_date, '%Y-%m-%d'),
 		COALESCE((SELECT bu2.status FROM booking_updates bu2 WHERE bu2.booking_id = b.id ORDER BY bu2.created_at DESC LIMIT 1), ''),
@@ -1042,7 +1111,7 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 		var b models.Booking
 		var allergyCount int
 		var eventDateCol, updateStatus, updatePaymentMethod, updateNewPackType sql.NullString
-		err := rows.Scan(&b.ID, &b.Name, &b.Surname, &b.Email, &b.PhoneCountryCode, &b.PhoneNumber, &b.AdultsCount, &b.ChildrenCount, &b.PackType, &b.HasPhotographer, &b.HasPremiumPass, &b.TotalAmountCents, &b.PaymentStatus, &b.PaymentMethod, &b.ConfirmedAssistance, &b.CreatedAt, &allergyCount, &eventDateCol, &updateStatus, &updatePaymentMethod, &updateNewPackType)
+		err := rows.Scan(&b.ID, &b.Name, &b.Surname, &b.Email, &b.PhoneCountryCode, &b.PhoneNumber, &b.AdultsCount, &b.ChildrenCount, &b.AdultPriceCents, &b.ChildPriceCents, &b.PackType, &b.HasPhotographer, &b.HasPremiumPass, &b.TotalAmountCents, &b.PaymentStatus, &b.PaymentMethod, &b.ConfirmedAssistance, &b.CreatedAt, &allergyCount, &eventDateCol, &updateStatus, &updatePaymentMethod, &updateNewPackType)
 		if err != nil {
 			continue
 		}
@@ -1052,8 +1121,12 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 			"surname":             b.Surname,
 			"email":               b.Email,
 			"phone":               b.PhoneCountryCode + " " + b.PhoneNumber,
+			"phoneCountryCode":    b.PhoneCountryCode,
+			"phoneNumber":         b.PhoneNumber,
 			"adultsCount":         b.AdultsCount,
 			"childrenCount":       b.ChildrenCount,
+			"adultPriceCents":     b.AdultPriceCents,
+			"childPriceCents":     b.ChildPriceCents,
 			"totalAmountCents":    b.TotalAmountCents,
 			"paymentStatus":       b.PaymentStatus,
 			"paymentMethod":       b.PaymentMethod,
@@ -1085,6 +1158,15 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 		// Attach the full composition (packs + individual tickets).
 		items := h.getBookingItems(b.ID)
 		booking["items"] = items
+		paymentMethods := map[string]bool{b.PaymentMethod: true}
+		for _, item := range items {
+			if method, ok := item["paymentMethod"].(string); ok && method != "" {
+				paymentMethods[method] = true
+			}
+		}
+		if len(paymentMethods) > 1 {
+			booking["paymentMethod"] = "mixed"
+		}
 		packNames := []string{}
 		for _, it := range items {
 			if name, ok := it["packName"].(string); ok && name != "" {
@@ -1215,6 +1297,19 @@ func (h *Handler) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	validStatuses := map[string]bool{"pending": true, "paid": true, "failed": true, "refunded": true}
+	validMethods := map[string]bool{"stripe": true, "bizum": true, "cash": true, "mixed": true}
+	for _, item := range req.Items {
+		if item.Adults < 0 || item.Children < 0 || item.AmountCents < 0 {
+			h.respondError(w, http.StatusBadRequest, "Ticket values cannot be negative")
+			return
+		}
+		if !validStatuses[item.PaymentStatus] || !validMethods[item.PaymentMethod] {
+			h.respondError(w, http.StatusBadRequest, "Invalid ticket payment data")
+			return
+		}
+	}
+
 	var updates []string
 	var args []interface{}
 
@@ -1234,8 +1329,43 @@ func (h *Handler) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 		updates = append(updates, "email = ?")
 		args = append(args, *req.Email)
 	}
+	if req.PhoneCountryCode != nil {
+		updates = append(updates, "phone_country_code = ?")
+		args = append(args, validation.SanitizeString(*req.PhoneCountryCode, 10))
+	}
+	if req.PhoneNumber != nil {
+		updates = append(updates, "phone_number = ?")
+		args = append(args, validation.SanitizeString(*req.PhoneNumber, 20))
+	}
+	if req.AdultsCount != nil && req.Items == nil {
+		if *req.AdultsCount < 0 {
+			h.respondError(w, http.StatusBadRequest, "Adult count cannot be negative")
+			return
+		}
+		updates = append(updates, "adults_count = ?")
+		args = append(args, *req.AdultsCount)
+	}
+	if req.ChildrenCount != nil && req.Items == nil {
+		if *req.ChildrenCount < 0 {
+			h.respondError(w, http.StatusBadRequest, "Child count cannot be negative")
+			return
+		}
+		updates = append(updates, "children_count = ?")
+		args = append(args, *req.ChildrenCount)
+	}
+	if req.TotalAmountCents != nil {
+		if *req.TotalAmountCents < 0 {
+			h.respondError(w, http.StatusBadRequest, "Amount cannot be negative")
+			return
+		}
+		updates = append(updates, "total_amount_cents = ?")
+		args = append(args, *req.TotalAmountCents)
+	}
+	if req.ConfirmedAssistance != nil {
+		updates = append(updates, "confirmed_assistance = ?")
+		args = append(args, *req.ConfirmedAssistance)
+	}
 	if req.PaymentStatus != nil {
-		validStatuses := map[string]bool{"pending": true, "paid": true, "failed": true, "refunded": true}
 		if !validStatuses[*req.PaymentStatus] {
 			h.respondError(w, http.StatusBadRequest, "Invalid payment status")
 			return
@@ -1244,7 +1374,6 @@ func (h *Handler) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 		args = append(args, *req.PaymentStatus)
 	}
 	if req.PaymentMethod != nil {
-		validMethods := map[string]bool{"stripe": true, "cash": true}
 		if !validMethods[*req.PaymentMethod] {
 			h.respondError(w, http.StatusBadRequest, "Invalid payment method")
 			return
@@ -1252,9 +1381,69 @@ func (h *Handler) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 		updates = append(updates, "payment_method = ?")
 		args = append(args, *req.PaymentMethod)
 	}
+	if req.Items != nil {
+		updates = append(updates, "adults_count = ?", "children_count = ?")
+		var currentAdults, currentChildren, previousAdults, previousChildren int
+		var currentPaymentMethod string
+		if err := h.db.QueryRow(`SELECT adults_count, children_count, payment_method FROM bookings WHERE id = ? AND deleted_at IS NULL`, id).Scan(&currentAdults, &currentChildren, &currentPaymentMethod); err != nil {
+			h.respondError(w, http.StatusNotFound, "Booking not found")
+			return
+		}
+		if err := h.db.QueryRow(`SELECT COALESCE(SUM(adults), 0), COALESCE(SUM(children), 0) FROM booking_items WHERE booking_id = ? AND item_type = 'individual'`, id).Scan(&previousAdults, &previousChildren); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "Failed to read ticket groups")
+			return
+		}
+		var adults, children int
+		for _, item := range req.Items {
+			adults += item.Adults
+			children += item.Children
+		}
+		nextAdults := currentAdults - previousAdults + adults
+		nextChildren := currentChildren - previousChildren + children
+		if req.AdultsCount != nil {
+			nextAdults = *req.AdultsCount
+		}
+		if req.ChildrenCount != nil {
+			nextChildren = *req.ChildrenCount
+		}
+		args = append(args, nextAdults, nextChildren)
+		methods := map[string]bool{}
+		for _, item := range req.Items {
+			methods[item.PaymentMethod] = true
+		}
+		var hasPackItems bool
+		if err := h.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM booking_items WHERE booking_id = ? AND item_type = 'pack')`, id).Scan(&hasPackItems); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "Failed to read booking items")
+			return
+		}
+		if hasPackItems {
+			methods[currentPaymentMethod] = true
+		}
+		if len(methods) > 1 || (len(methods) == 1 && !hasPackItems) {
+			updates = append(updates, "payment_method = ?")
+			for method := range methods {
+				if len(methods) == 1 {
+					args = append(args, method)
+				} else {
+					args = append(args, "mixed")
+				}
+				break
+			}
+		}
+	}
 
 	if len(updates) == 0 {
 		h.respondError(w, http.StatusBadRequest, "No fields to update")
+		return
+	}
+
+	// Preserve each existing line's payment details before a booking-level method
+	// can change to "mixed".
+	if _, err := h.db.Exec(`UPDATE booking_items bi JOIN bookings b ON b.id = bi.booking_id
+		SET bi.payment_status = COALESCE(bi.payment_status, b.payment_status),
+			bi.payment_method = COALESCE(bi.payment_method, b.payment_method)
+		WHERE bi.booking_id = ? AND (bi.payment_status IS NULL OR bi.payment_method IS NULL)`, id); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "Failed to preserve ticket payment data")
 		return
 	}
 
@@ -1274,6 +1463,13 @@ func (h *Handler) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 	if rows == 0 {
 		h.respondError(w, http.StatusNotFound, "Booking not found")
 		return
+	}
+
+	if req.Items != nil {
+		if err := h.replaceIndividualTicketGroups(id, req.Items); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "Failed to update ticket groups")
+			return
+		}
 	}
 
 	// Generate QR code if payment status changed to paid and QR doesn't exist
@@ -1301,6 +1497,65 @@ func (h *Handler) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 
 	go h.broadcastCapacity(0)
 	h.respondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// SendBookingUpdateEmail sends an updated booking summary after an admin save.
+func (h *Handler) SendBookingUpdateEmail(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSuffix(extractID(r.URL.Path, "/api/admin/bookings/"), "/send-update-email")
+	if id == "" {
+		h.respondError(w, http.StatusBadRequest, "Missing booking ID")
+		return
+	}
+	var exists bool
+	if err := h.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM bookings WHERE id = ? AND deleted_at IS NULL)`, id).Scan(&exists); err != nil || !exists {
+		h.respondError(w, http.StatusNotFound, "Booking not found")
+		return
+	}
+	var req struct {
+		Changes []string `json:"changes"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			h.respondError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+	}
+	if err := h.ensureBookingQRCode(id); err != nil {
+		log.Printf("Failed to prepare QR for booking update email %s: %v", id, err)
+		h.respondError(w, http.StatusInternalServerError, "Failed to prepare QR code")
+		return
+	}
+	if err := h.sendCurrentBookingUpdateEmail(id, req.Changes); err != nil {
+		log.Printf("Failed to send booking update email %s: %v", id, err)
+		h.respondError(w, http.StatusInternalServerError, "Failed to send update email")
+		return
+	}
+	h.respondJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+// replaceIndividualTicketGroups stores each individual-ticket payment group.
+func (h *Handler) replaceIndividualTicketGroups(bookingID string, items []models.BookingItemUpdate) error {
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err = tx.Exec(`DELETE FROM booking_items WHERE booking_id = ? AND item_type = 'individual'`, bookingID); err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Adults == 0 && item.Children == 0 && item.AmountCents == 0 {
+			continue
+		}
+		if _, err = tx.Exec(`INSERT INTO booking_items
+			(booking_id, item_type, adults, children, quantity, unit_price_cents, line_total_cents, payment_status, payment_method)
+			VALUES (?, 'individual', ?, ?, 1, ?, ?, ?, ?)`,
+			bookingID, item.Adults, item.Children, item.AmountCents, item.AmountCents, item.PaymentStatus, item.PaymentMethod); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // DeleteBooking soft-deletes a booking.
@@ -2248,7 +2503,7 @@ func (h *Handler) GetBookingUpdate(w http.ResponseWriter, r *http.Request) {
 			LineItems: []*stripe.CheckoutSessionLineItemParams{
 				{
 					PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
-						Currency:   stripe.String("eur"),
+						Currency: stripe.String("eur"),
 						ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
 							Name: stripe.String(fmt.Sprintf("Suplemento cambio de pack (%.2f€)", differenceEuros)),
 						},

@@ -79,7 +79,7 @@ type Pack struct {
 	Includes         []string `json:"includes"`
 	DisplayOrder     int      `json:"displayOrder"`
 	Active           bool     `json:"active"`
-	Completed        bool     `json:"completed"` // Sold out: disables selection and shows a "Completo" ribbon
+	Completed        bool     `json:"completed"`        // Sold out: disables selection and shows a "Completo" ribbon
 	MaxLimitEnabled  bool     `json:"maxLimitEnabled"`  // Whether a per-pack limit is enabled
 	MaxTickets       int      `json:"maxTickets"`       // Maximum number of packs allowed when the limit is enabled
 	SoldTickets      int      `json:"soldTickets"`      // Number of packs already sold (paid bookings)
@@ -158,7 +158,7 @@ type Booking struct {
 	ChildPriceCents         int            `json:"childPriceCents"`         // Price per child at time of booking
 	TotalAmountCents        int            `json:"totalAmountCents"`        // Total amount (adults*price + children*price)
 	PaymentStatus           string         `json:"paymentStatus"`           // "pending", "paid", "failed", "refunded"
-	PaymentMethod           string         `json:"paymentMethod"`           // "stripe" or "cash"
+	PaymentMethod           string         `json:"paymentMethod"`           // "stripe", "bizum", "cash", or "mixed"
 	StripeCheckoutSessionID sql.NullString `json:"stripeCheckoutSessionId"` // Stripe Checkout session ID
 	StripePaymentIntentID   sql.NullString `json:"stripePaymentIntentId"`   // Stripe PaymentIntent ID after payment
 	QRToken                 string         `json:"qrToken"`                 // Unique token for QR code (UUID)
@@ -182,16 +182,32 @@ type Capacity struct {
 	AvailableTickets int `json:"availableTickets"` // MaxCapacity - SoldTickets
 }
 
+// DateKPIs represents per-event-date metrics for the admin dashboard.
+type DateKPIs struct {
+	EventDateID         int    `json:"eventDateId"`
+	EventDate           string `json:"eventDate"`
+	IsOpen              bool   `json:"isOpen"`
+	TicketsSold         int    `json:"ticketsSold"`
+	AdultTickets        int    `json:"adultTickets"`
+	ChildTickets        int    `json:"childTickets"`
+	MaxCapacity         int    `json:"maxCapacity"`
+	AvailableCapacity   int    `json:"availableCapacity"`
+	AmountEarned        int    `json:"amountEarned"`
+	PaidOnline          int    `json:"paidOnline"`
+	PaidCash            int    `json:"paidCash"`
+	ConfirmedAttendance int    `json:"confirmedAttendance"`
+}
+
 // KPIs represents key performance indicators for the admin dashboard.
 type KPIs struct {
-	TotalTicketsSold    int `json:"totalTicketsSold"`    // Total tickets (adults + children) sold
-	TotalAmountEarned   int `json:"totalAmountEarned"`   // Total revenue in cents
-	AmountPaidOnline    int `json:"amountPaidOnline"`    // Revenue from Stripe payments
-	AmountPaidCash      int `json:"amountPaidCash"`      // Revenue from cash payments
-	TotalAdultTickets   int `json:"totalAdultTickets"`   // Total adult tickets sold
-	TotalChildTickets   int `json:"totalChildTickets"`   // Total child tickets sold
-	AvailableCapacity   int `json:"availableCapacity"`   // Remaining tickets
-	ConfirmedAttendance int `json:"confirmedAttendance"` // Bookings with confirmed attendance
+	TotalTicketsSold    int        `json:"totalTicketsSold"`    // Total tickets (adults + children) sold
+	TotalAmountEarned   int        `json:"totalAmountEarned"`   // Total revenue in cents
+	AmountPaidOnline    int        `json:"amountPaidOnline"`    // Revenue from Stripe payments
+	AmountPaidCash      int        `json:"amountPaidCash"`      // Revenue from cash payments
+	TotalAdultTickets   int        `json:"totalAdultTickets"`   // Total adult tickets sold
+	TotalChildTickets   int        `json:"totalChildTickets"`   // Total child tickets sold
+	ConfirmedAttendance int        `json:"confirmedAttendance"` // Bookings with confirmed attendance
+	Dates               []DateKPIs `json:"dates"`               // Per-event-date breakdown
 }
 
 // =============================================================================
@@ -234,6 +250,8 @@ type BookingItem struct {
 	Quantity        int            `json:"quantity"`
 	UnitPriceCents  int            `json:"unitPriceCents"`
 	LineTotalCents  int            `json:"lineTotalCents"`
+	PaymentStatus   sql.NullString `json:"-"`
+	PaymentMethod   sql.NullString `json:"-"`
 }
 
 // BookingItemInput is one item submitted by the client when creating a booking.
@@ -268,32 +286,44 @@ type CreateBookingRequest struct {
 // UpdateBookingRequest is the payload for updating a booking (admin).
 // All fields are optional (pointers).
 type UpdateBookingRequest struct {
-	Name          *string `json:"name"`
-	Surname       *string `json:"surname"`
-	Email         *string `json:"email"`
-	PhoneCountryCode *string `json:"phoneCountryCode"`
-	PhoneNumber   *string `json:"phoneNumber"`
-	AdultsCount   *int    `json:"adultsCount"`
-	ChildrenCount *int    `json:"childrenCount"`
-	PaymentStatus *string `json:"paymentStatus"`
-	PaymentMethod *string `json:"paymentMethod"`
+	Name                *string             `json:"name"`
+	Surname             *string             `json:"surname"`
+	Email               *string             `json:"email"`
+	PhoneCountryCode    *string             `json:"phoneCountryCode"`
+	PhoneNumber         *string             `json:"phoneNumber"`
+	AdultsCount         *int                `json:"adultsCount"`
+	ChildrenCount       *int                `json:"childrenCount"`
+	PaymentStatus       *string             `json:"paymentStatus"`
+	PaymentMethod       *string             `json:"paymentMethod"`
+	TotalAmountCents    *int                `json:"totalAmountCents"`
+	ConfirmedAssistance *bool               `json:"confirmedAssistance"`
+	Items               []BookingItemUpdate `json:"items"`
+}
+
+// BookingItemUpdate represents an individual-ticket payment group edited by an admin.
+type BookingItemUpdate struct {
+	Adults        int    `json:"adults"`
+	Children      int    `json:"children"`
+	AmountCents   int    `json:"amountCents"`
+	PaymentStatus string `json:"paymentStatus"`
+	PaymentMethod string `json:"paymentMethod"`
 }
 
 // BookingUpdate represents a requested change to a booking (pack change).
 type BookingUpdate struct {
-	ID                 int            `json:"id"`
-	BookingID          string         `json:"bookingId"`
-	OldPackType        string         `json:"oldPackType"`
-	NewPackType        string         `json:"newPackType"`
-	OldPriceCents      int            `json:"oldPriceCents"`
-	NewPriceCents      int            `json:"newPriceCents"`
-	DifferenceCents    int            `json:"differenceCents"`
-	Status             string         `json:"status"` // "awaiting_payment", "paid", "cancelled", "manual"
-	PaymentMethod      sql.NullString `json:"paymentMethod"` // "bizum", "transferencia", "efectivo"
-	StripeSessionID    sql.NullString `json:"stripeSessionId"`
-	Token              string         `json:"token"` // unique token for payment link
-	CreatedAt          time.Time      `json:"createdAt"`
-	UpdatedAt          time.Time      `json:"updatedAt"`
+	ID              int            `json:"id"`
+	BookingID       string         `json:"bookingId"`
+	OldPackType     string         `json:"oldPackType"`
+	NewPackType     string         `json:"newPackType"`
+	OldPriceCents   int            `json:"oldPriceCents"`
+	NewPriceCents   int            `json:"newPriceCents"`
+	DifferenceCents int            `json:"differenceCents"`
+	Status          string         `json:"status"`        // "awaiting_payment", "paid", "cancelled", "manual"
+	PaymentMethod   sql.NullString `json:"paymentMethod"` // "bizum", "transferencia", "efectivo"
+	StripeSessionID sql.NullString `json:"stripeSessionId"`
+	Token           string         `json:"token"` // unique token for payment link
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
 }
 
 // BookingUpdateRequest is the payload for requesting a pack change.
@@ -306,22 +336,22 @@ type BookingUpdateRequest struct {
 // UpdateSettingsRequest is the payload for updating settings (admin).
 // All fields are optional (pointers).
 type UpdateSettingsRequest struct {
-	MaxCapacity               *int    `json:"maxCapacity"`
-	AdultPriceCents           *int    `json:"adultPriceCents"`
-	ChildPriceCents           *int    `json:"childPriceCents"`
-	EventDate                 *string `json:"eventDate"`
-	EventInfo                 *string `json:"eventInfo"`
-	EarlyBirdCount            *int    `json:"earlyBirdCount"`
-	EarlyBirdDiscountPercent  *int    `json:"earlyBirdDiscountPercent"`
-	MaxIndividualAdultTickets *int    `json:"maxIndividualAdultTickets"`
-	MaxIndividualChildTickets *int    `json:"maxIndividualChildTickets"`
-	EmailProvider             *string `json:"emailProvider"`
-	SMTPHost                  *string `json:"smtpHost"`
-	SMTPPort                  *int    `json:"smtpPort"`
-	SMTPUsername              *string `json:"smtpUsername"`
-	SMTPPassword              *string `json:"smtpPassword"`
-	SMTPFromEmail             *string `json:"smtpFromEmail"`
-	GmailUsername             *string `json:"gmailUsername"`
-	GmailAppPassword          *string `json:"gmailAppPassword"`
+	MaxCapacity               *int        `json:"maxCapacity"`
+	AdultPriceCents           *int        `json:"adultPriceCents"`
+	ChildPriceCents           *int        `json:"childPriceCents"`
+	EventDate                 *string     `json:"eventDate"`
+	EventInfo                 *string     `json:"eventInfo"`
+	EarlyBirdCount            *int        `json:"earlyBirdCount"`
+	EarlyBirdDiscountPercent  *int        `json:"earlyBirdDiscountPercent"`
+	MaxIndividualAdultTickets *int        `json:"maxIndividualAdultTickets"`
+	MaxIndividualChildTickets *int        `json:"maxIndividualChildTickets"`
+	EmailProvider             *string     `json:"emailProvider"`
+	SMTPHost                  *string     `json:"smtpHost"`
+	SMTPPort                  *int        `json:"smtpPort"`
+	SMTPUsername              *string     `json:"smtpUsername"`
+	SMTPPassword              *string     `json:"smtpPassword"`
+	SMTPFromEmail             *string     `json:"smtpFromEmail"`
+	GmailUsername             *string     `json:"gmailUsername"`
+	GmailAppPassword          *string     `json:"gmailAppPassword"`
 	Packs                     []PackInput `json:"packs"`
 }
