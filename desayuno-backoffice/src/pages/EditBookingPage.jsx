@@ -86,6 +86,32 @@ const getPackAmountCents = (booking) => (Array.isArray(booking?.items) ? booking
   .filter((item) => item.itemType === 'pack')
   .reduce((total, item) => total + (item.lineTotalCents || 0), 0);
 
+const getExistingPackPaymentGroups = (booking) => {
+  const packItems = (Array.isArray(booking?.items) ? booking.items : [])
+    .filter((item) => item.itemType === 'pack');
+  if (packItems.length > 0) {
+    return packItems.map((item, index) => ({
+      id: item.id || `pack-${index}`,
+      label: item.packName || PACK_NAMES[item.packType] || item.packType || 'Pack',
+      adults: (item.adults || 0) * (item.quantity || 1),
+      children: (item.children || 0) * (item.quantity || 1),
+      amountCents: item.lineTotalCents || 0,
+      paymentStatus: item.paymentStatus || booking.paymentStatus || 'pending',
+      paymentMethod: item.paymentMethod || booking.paymentMethod || 'stripe',
+    }));
+  }
+  if (!booking?.packType) return [];
+  return [{
+    id: 'legacy-pack',
+    label: booking.packName || PACK_NAMES[booking.packType] || booking.packType,
+    adults: booking.adultsCount || 0,
+    children: booking.childrenCount || 0,
+    amountCents: booking.totalAmountCents || 0,
+    paymentStatus: booking.paymentStatus || 'pending',
+    paymentMethod: booking.paymentMethod || 'stripe',
+  }];
+};
+
 function AllergyMemberCard({ member, onUpdate, onDelete }) {
   const toggleAllergy = (allergyId) => {
     const newAllergies = member.allergies.includes(allergyId)
@@ -519,6 +545,8 @@ export default function EditBookingPage() {
     );
   }
 
+  const existingPackPaymentGroups = getExistingPackPaymentGroups(bookingData);
+
   return (
     <div>
       <button
@@ -761,12 +789,46 @@ export default function EditBookingPage() {
                 </button>
               </div>
 
-              {ticketGroups.length === 0 ? (
+              {existingPackPaymentGroups.length === 0 && ticketGroups.length === 0 ? (
                 <p className="text-sm text-gray-500 border border-dashed rounded-lg p-4 text-center">
                   No hay entradas individuales. Pulsa "Añadir entradas" para crear grupo de pago.
                 </p>
               ) : (
                 <div className="space-y-3">
+                  {existingPackPaymentGroups.map((group, index) => (
+                    <div key={group.id} className="border border-purple-200 bg-purple-50 rounded-lg p-3 sm:p-4">
+                      <div className="mb-3">
+                        <p className="font-medium text-purple-800">Grupo existente {index + 1}: {group.label}</p>
+                        <p className="text-xs text-purple-600 mt-1">Compra original. Usa "Cambiar pack" para modificar estas entradas.</p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white rounded-lg border p-2">
+                          <span className="text-sm font-medium text-gray-700">Adultos</span>
+                          <p className="text-lg font-bold text-purple-700">{group.adults}</p>
+                        </div>
+                        <div className="bg-white rounded-lg border p-2">
+                          <span className="text-sm font-medium text-gray-700">Niños</span>
+                          <p className="text-lg font-bold text-purple-700">{group.children}</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Estado de pago</label>
+                          <Select value={group.paymentStatus} onChange={() => {}} options={TICKET_STATUS_OPTIONS} disabled />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Método de pago</label>
+                          <Select value={group.paymentMethod} onChange={() => {}} options={TICKET_METHOD_OPTIONS} disabled />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Importe (€)</label>
+                          <input type="number" className="input" value={(group.amountCents / 100).toFixed(2)} disabled />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                   {ticketGroups.map((group, index) => (
                     <div key={index} className="border border-blue-200 bg-blue-50 rounded-lg p-3 sm:p-4">
                       <div className="flex items-center justify-between gap-2 mb-3">

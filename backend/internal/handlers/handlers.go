@@ -1461,8 +1461,11 @@ func (h *Handler) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		h.respondError(w, http.StatusNotFound, "Booking not found")
-		return
+		var exists bool
+		if err := h.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM bookings WHERE id = ? AND deleted_at IS NULL)`, id).Scan(&exists); err != nil || !exists {
+			h.respondError(w, http.StatusNotFound, "Booking not found")
+			return
+		}
 	}
 
 	if req.Items != nil {

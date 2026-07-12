@@ -93,6 +93,37 @@ func TestUpdateBookingPersistsMixedPaymentGroups(t *testing.T) {
 	}
 }
 
+func TestUpdateBookingAcceptsUnchangedBooking(t *testing.T) {
+	database := testDB(t)
+	defer database.Close()
+	database.Exec(`DELETE FROM bookings WHERE id = ?`, updateTestBookingID)
+	defer database.Exec(`DELETE FROM bookings WHERE id = ?`, updateTestBookingID)
+	_, err := database.Exec(`INSERT INTO bookings
+		(id, name, surname, email, phone_country_code, phone_number, adults_count, children_count,
+		 adult_price_cents, child_price_cents, total_amount_cents, payment_status, payment_method, qr_token)
+		VALUES (?, 'Ana', 'García', 'ana@example.com', '+34', '600111222', 1, 1,
+		 3500, 4500, 8000, 'paid', 'stripe', ?)`, updateTestBookingID, updateTestQRToken)
+	if err != nil {
+		t.Fatalf("insert booking: %v", err)
+	}
+	_, err = database.Exec(`INSERT INTO booking_items
+		(booking_id, item_type, adults, children, quantity, unit_price_cents, line_total_cents, payment_status, payment_method)
+		VALUES (?, 'individual', 1, 1, 1, 8000, 8000, 'paid', 'stripe')`, updateTestBookingID)
+	if err != nil {
+		t.Fatalf("insert ticket group: %v", err)
+	}
+
+	h := &Handler{db: database}
+	body := []byte(`{"items":[{"adults":1,"children":1,"amountCents":8000,"paymentStatus":"paid","paymentMethod":"stripe"}]}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/bookings/"+updateTestBookingID, bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.UpdateBooking(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected unchanged booking update to return 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestUpdateBookingKeepsExistingPackPaymentMetadata(t *testing.T) {
 	database := testDB(t)
 	defer database.Close()
